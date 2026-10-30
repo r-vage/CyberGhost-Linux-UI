@@ -276,9 +276,11 @@ and its active IPv4 route. No connection/disconnection was performed for that ch
   existing direct sockets, marked versus unmarked UDP, loopback, forwarded traffic,
   tunnel removal, modified-rule detection and preservation of another firewall
   table. The actual host firewall and active VPN were not changed.
-- The README screenshot was rendered from actual GTK widgets in clearly marked
-  demo mode. The setup screenshot uses simulated missing-installation state.
-  No generated mockup or live connection is depicted.
+- The README screenshots and five-scene [visual tour](Visual_Tour.md) are
+  rendered from actual GTK widgets using in-memory demo data. Setup uses
+  simulated missing-installation state. The capture script waits for stable
+  layout and checks that callout targets are visible; no live connection is
+  depicted. See [documentation captures](#documentation-captures).
 - Generated boot service and desktop startup entry pass `systemd-analyze verify`
   and `desktop-file-validate`. Installed CLI/Python/systemctl ownership was verified
   read-only. After the user enabled startup and rebooted, read-only journal checks
@@ -406,3 +408,47 @@ instead of saved as empty lists. Once connection status confirms the new tunnel,
 the selected city's pending list is fetched automatically. A failed refresh keeps
 its cached entries and identifies the failure. `tests/gui_server_loading.py` checks
 these cases with controlled futures and the real GTK widgets.
+
+## Documentation captures
+
+`tools/capture_docs.py` refreshes `docs/desktop.png`, `docs/setup.png` and
+`docs/startup.png`, and renders five annotated pages in `docs/tour/` for the
+[visual tour](Visual_Tour.md). It uses the actual GTK widget tree with Cairo/Pango
+for the surrounding titles, numbered callouts and outlines. There is no ComfyUI,
+browser or image-generation dependency.
+
+Run with the system Python and the GTK/PyGObject/Cairo packages used by the app:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/capture_docs.py
+```
+
+To review captures before replacing repository images:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/capture_docs.py --output /tmp/cyberghost-docs
+```
+
+The script always uses the demo client, non-persistent preferences, demo firewall
+and startup managers, plus a simulated Setup state. Subprocess and setup actions
+are blocked during capture. Its example servers and public addresses are not
+read from the host VPN or an online catalog.
+
+For a separate GTK display, start this in one terminal:
+
+```sh
+broadwayd --address=127.0.0.1 --port=8088 :8
+```
+
+Then run the capture in another terminal:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 G_DEBUG=fatal-criticals \
+GDK_BACKEND=broadway BROADWAY_DISPLAY=:8 \
+/usr/bin/python3 tools/capture_docs.py --output /tmp/cyberghost-docs
+```
+
+Stop that temporary `broadwayd` with Ctrl+C when finished. Review all eight images
+at full size, especially popover placement, expanded sections and callout targets.
+GTK theme/font differences may slightly change dimensions; captures wait for
+layout to stabilize and reject hidden targets or overlapping callout boxes.

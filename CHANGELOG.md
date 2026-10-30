@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 — 2026-10-30
+
+- Refresh the desktop, startup and setup screenshots with country flags, shared status icons and current controls. Add a five-part visual tour with numbered callouts for locations, connection protection, startup, activity and CLI setup, linked from the README.
+- Add a reusable documentation capture script that renders real GTK screens with demo data, without ComfyUI or changes to the active VPN.
+
 ## 0.1.1 — 2026-10-30
 
 - Add bundled country flags to the location list for offline display, with country-code fallback. Reuse the tray's connected, disconnected and unknown-state shield icons in the connection panel, keeping both indicators synchronized during connection changes and boot startup.

@@ -4,7 +4,10 @@ A small native Linux desktop app for the CyberGhost VPN command line client.
 Built with Python and GTK 3. This is an independent, unofficial project. CyberGhost is a trademark of its
 owner; this project is not affiliated with CyberGhost.
 
-![CyberGhost Desktop in demo mode](docs/desktop.png)
+**[Take the visual tour](docs/Visual_Tour.md)** for annotated screenshots of
+locations, connection controls, startup and setup.
+
+![CyberGhost Desktop with country flags and its connected status icon in demo mode](docs/desktop.png)
 
 ## What it does
 
@@ -345,6 +348,10 @@ Only choices and favorites are saved. CLI output is kept in memory while the
 window is open. Demo mode neither reads nor writes normal preferences.
 
 ## Development and checks
+
+The screenshots and [visual tour](docs/Visual_Tour.md) are captured from the
+real GTK interface using demo data. See [documentation captures](docs/implementation.md#documentation-captures)
+to regenerate them without ComfyUI or an active VPN.
 
 ```sh
 /usr/bin/python3 -m unittest discover -s tests -v
