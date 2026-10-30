@@ -62,7 +62,24 @@ class ParserTests(unittest.TestCase):
 
     def test_servers_use_instance_not_city(self):
         servers = parse_choices(SERVERS, "server")
-        self.assertEqual([server.value for server in servers], ["frankfurt-s415-i01", "frankfurt-s415-i02"])
+        self.assertEqual([server.value for server in servers], ["frankfurt-s415-i02", "frankfurt-s415-i01"])
+
+    def test_servers_sort_lowest_load_first_with_unknown_load_last(self):
+        source = """| No. | City | Instance | Load |
+| 1 | Frankfurt | unknown-a | N/A |
+| 2 | Frankfurt | server-b | 10% |
+| 3 | Frankfurt | busy | 100% |
+| 4 | Frankfurt | server-a | 10% |
+| 5 | Frankfurt | idle | 0% |
+| 6 | Frankfurt | unknown-b | - |
+"""
+        choices = parse_choices(source, "server")
+        self.assertEqual([choice.value for choice in choices],
+                         ["idle", "server-a", "server-b", "busy", "unknown-a", "unknown-b"])
+        self.assertEqual([choice.load for choice in choices], [0, 10, 10, 100, None, None])
+        # Cities keep their alphabetical order regardless of load.
+        cities = parse_choices(CITIES.replace("47%", "90%").replace("48%", "1%"), "city")
+        self.assertEqual([choice.value for choice in cities], ["Berlin", "Frankfurt"])
 
     def test_unknown_output_is_not_connected(self):
         for text in ["", "Connection attempt started", "VPN connection established.", "Traceback: unknown error"]:

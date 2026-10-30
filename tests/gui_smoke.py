@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cyberghost_desktop.app import Application, Gio, GLib, Gtk  # noqa: E402
+from cyberghost_desktop.app import Application, Gio, GLib, Gtk, location_flag  # noqa: E402
 from cyberghost_desktop.cli import Choice, CliError, Status  # noqa: E402
 from cyberghost_desktop.public_ip import PublicIP  # noqa: E402
 from cyberghost_desktop.startup import StartupState  # noqa: E402
@@ -82,6 +82,23 @@ try:
     window = app.window
     until(lambda: len(window.locations) == 8 and window.state.state == "disconnected")
     assert not window.client.connected
+
+    def icon_state(expected, description):
+        icon, _size = window.status_icon.get_gicon()
+        assert icon.get_file().get_basename() == f"cyberghost-desktop-{expected}.svg"
+        assert window.status_icon.get_pixel_size() == 48
+        assert description in window.status_icon.get_tooltip_text()
+        assert window.status_icon.get_accessible().get_name() == window.status_icon.get_tooltip_text()
+        assert window.connection_appearance() == (expected, window.status_icon.get_tooltip_text())
+
+    icon_state("disconnected", "Disconnected")
+    for row in window.location_list.get_children():
+        flag = row.get_child().get_children()[0]
+        assert isinstance(flag, Gtk.Image)
+        assert flag.get_gicon()[0].get_file().get_basename() == row.location.code.lower() + ".svg"
+        assert row.location.code in flag.get_accessible().get_name()
+    fallback = location_flag("ZZ", "Unknown country")
+    assert isinstance(fallback, Gtk.Label) and fallback.get_text() == "ZZ"
     assert not window.connect_button.get_sensitive()
     assert not window.setup_button.get_sensitive()
     assert window.guard_state.state == "off" and not app.guard.enabled
@@ -130,15 +147,17 @@ try:
     assert not window.setup_button.get_sensitive()
     window._control("connect")
     assert not window.control_busy and not window.client.connected
+    icon_state("unknown", "Starting VPN")
     app.startup.state = StartupState()
     window.refresh_startup()
     window.protocol.set_active_id("wireguard")
     window._apply_status(Status("unknown", "Cannot verify WireGuard status"))
+    icon_state("unknown", "Status unknown")
     assert not window.connect_button.get_sensitive(), "Unknown status must not invite repeated reconnects"
     assert window.disconnect_button.get_sensitive()
     window._apply_status(Status("connected", "CyberGhost WireGuard interface is active and the IPv4 internet route uses it."))
     assert "IPv4 internet route" in window.status_detail.get_text()
-    assert not window.connect_button.get_sensitive()
+    assert window.connect_button.get_sensitive(), "An externally established VPN can be explicitly switched"
     window._apply_status(Status("disconnected", "No VPN connections found."))
     assert window.connect_button.get_sensitive()
     assert not window.transport.get_sensitive()
@@ -150,6 +169,35 @@ try:
     window.server.set_active_id("frankfurt-s415-i01")
     assert "--connection TCP" in window.command_label.get_text()
     assert "--server frankfurt-s415-i01" in window.command_label.get_text()
+    # A real city can have nearly 1,000 servers. Its menu must scroll instead
+    # of becoming a screen-height popup with a large blank area.
+    picker = window.server
+    for index in range(1000):
+        picker.append(f"test-{index}", f"frankfurt-test-{index:04d} · 50% load")
+    assert picker.get_model()[0][1] == "", "Automatic stays first"
+    picker.button.clicked()
+    until(lambda: picker.popover.get_mapped())
+    assert picker.get_active_id() == "frankfurt-s415-i01", "Opening must not change selection"
+    until(lambda: picker.scroll.get_allocated_height() > 20)
+    assert picker.scroll.get_allocated_height() <= 300
+    adjustment = picker.scroll.get_vadjustment()
+    assert adjustment.get_upper() > adjustment.get_page_size()
+    last_path = Gtk.TreePath.new_from_indices([len(picker.get_model()) - 1])
+    picker.tree.set_cursor(last_path)
+    assert picker.get_active_id() == "frankfurt-s415-i01", "Keyboard navigation must wait for activation"
+    picker.tree.emit("row-activated", last_path, picker.tree.get_column(0))
+    assert picker.get_active_id() == "test-999"
+    assert "--server test-999" in window.command_label.get_text()
+    assert not picker.popover.get_visible()
+    picker.button.clicked()
+    until(lambda: picker.popover.get_mapped() and adjustment.get_value() > 0)
+    assert picker.tree.get_cursor()[0] == last_path, "Reopen at the selected server"
+    picker.popover.popdown()
+    assert picker.get_active_id() == "test-999", "Dismissing must retain the choice"
+    window._city_changed()
+    until(lambda: len(picker.get_model()) == 2)
+    assert picker.get_active_id() == "", "City changes reset to Automatic"
+
     window.favorite_button.set_active(True)
     window.favorites_only.set_active(True)
     assert len(window.location_list.get_children()) == 1
@@ -162,6 +210,7 @@ try:
 
     window.connect_button.emit("clicked")
     until(lambda: window.state.state == "connected" and not window.control_busy)
+    icon_state("connected", "Connected")
     assert window.current_ip_label.get_text() == "198.51.100.24 · DE"
     assert window.before_ip_label.get_text() == "203.0.113.42"
     assert not window.guard_toggle.get_sensitive(), "OpenVPN is not supported by this WireGuard guard"
@@ -169,16 +218,83 @@ try:
     assert window.guard_toggle.get_sensitive()
     window.guard_toggle.set_active(True)
     until(lambda: window.guard_state.state == "on" and not window.control_busy)
-    assert not window.connect_button.get_sensitive()
+    assert window.connect_button.get_sensitive(), "Changing the protocol enables a connection switch"
     assert window.disconnect_button.get_sensitive()
     window.disconnect_button.emit("clicked")
     until(lambda: window.state.state == "disconnected" and not window.control_busy)
+    icon_state("disconnected", "Disconnected")
     assert window.guard_state.state == "on" and app.guard.enabled
-    assert not window.connect_button.get_sensitive()
+    assert window.connect_button.get_sensitive(), "Disconnect must allow a protected reconnect"
     assert window.current_ip_label.get_text() == "Blocked by VPN only"
+    assert "VPN only stays on" in window.operation_note.get_text()
+    locations = window.client.locations
+    def blocked_catalogue(_mode):
+        raise AssertionError("Offline refresh must reuse saved locations")
+    window.client.locations = blocked_catalogue
+    window.refresh()
+    until(lambda: len(window.locations) == 8 and len(window.city.get_model()) == 3)
+    assert "saved locations" in window.location_count.get_text()
+    assert window.connect_button.get_sensitive()
+    window.client.locations = locations
+    window.city.set_active_id("")
+    window.city.set_active_id("Frankfurt")
+    until(lambda: len(window.server.get_model()) == 2)
+    assert window.connect_button.get_sensitive(), "Changing cities must allow a protected reconnect"
+    assert window.guard_toggle.get_sensitive(), "Explicitly disabling VPN only is still possible"
+    window.protocol.set_active_id("openvpn")
+    assert not window.connect_button.get_sensitive(), "The guard supports WireGuard only"
+    window.protocol.set_active_id("wireguard")
+    # A failed protected connect must not silently turn off the guard.
+    connect = window.client.connect
+    def failed_connect(_selection, *, vpn_only=False, replace_existing=False):
+        assert vpn_only
+        raise CliError("Test reconnect failed")
+    window.client.connect = failed_connect
+    window.connect_button.emit("clicked")
+    until(lambda: window.state.state == "disconnected" and not window.control_busy)
+    assert window.guard_state.state == "on" and app.guard.enabled
+    assert window.guard_toggle.get_active() and window.connect_button.get_sensitive()
+    window.client.connect = connect
+    window.connect_button.emit("clicked")
+    until(lambda: window.state.state == "connected" and not window.control_busy)
+    assert window.client.last_vpn_only and app.guard.enabled
+    assert window.guard_toggle.get_active(), "Reconnect must not toggle protection off"
+    assert not window.connect_button.get_sensitive(), "Unchanged active selection must not reconnect"
+    assert not window.client.last_replace_existing
+    window.server.set_active_id("frankfurt-s415-i01")
+    assert window.connect_button.get_sensitive() and window.client.connected
+    window.server.set_active_id("")
+    assert not window.connect_button.get_sensitive(), "Returning to the active selection disables Connect"
+    window.server.set_active_id("frankfurt-s415-i01")
+    assert "disconnect the current VPN" in window.operation_note.get_text()
+    window.connect_button.emit("clicked")
+    until(lambda: window.state.state == "connected" and not window.control_busy)
+    assert window.client.last_replace_existing and window.client.last_vpn_only
+    assert window.guard_toggle.get_active() and app.guard.enabled
+    assert not window.connect_button.get_sensitive()
+    window.disconnect_button.emit("clicked")
+    until(lambda: window.state.state == "disconnected" and not window.control_busy)
+    # The reported failure must keep the verified protection and explanation.
+    change_guard = app.guard.change
+    def missing_helper(_enabled):
+        raise CliError("Helper missing; restart the app")
+    app.guard.change = missing_helper
+    window.guard_toggle.set_active(False)
+    until(lambda: not window.control_busy)
+    assert window.guard_state.state == "on" and window.guard_toggle.get_active()
+    assert window.connect_button.get_sensitive()
+    assert "VPN only stays on" in window.operation_note.get_text()
+    app.guard.change = change_guard
     window.guard_toggle.set_active(False)
     until(lambda: window.guard_state.state == "off" and not window.control_busy)
     assert window.connect_button.get_sensitive()
+    assert "VPN only stays on" not in window.operation_note.get_text()
+    window.connect_button.emit("clicked")
+    until(lambda: window.state.state == "connected" and not window.control_busy)
+    assert window._selection().city == "Frankfurt"
+    window.disconnect_button.emit("clicked")
+    until(lambda: window.state.state == "disconnected" and not window.control_busy)
+    assert window.connect_button.get_sensitive(), "Disconnecting without VPN only immediately allows reconnect"
 
     window.mode.set_active_id("streaming")
     until(lambda: len(window.locations) == 1)
@@ -245,6 +361,7 @@ try:
     old_status = controlled.tasks[-1][1]
     window._control("connect")
     control = controlled.tasks[-1][1]
+    icon_state("unknown", "Connecting")
     control.set_result("Demo connect finished")
     pump()
     fresh_status = controlled.tasks[-1][1]
@@ -255,12 +372,14 @@ try:
     assert window.state.state == "connected"
 
     window._control("disconnect")
+    icon_state("unknown", "Disconnecting")
     controlled.tasks[-1][1].set_exception(CliError("Authorization was cancelled."))
     pump()
     controlled.tasks[-1][1].set_result(Status("connected", "VPN connection found."))
     pump()
     assert window.error_box.get_visible()
     assert window.state.state == "connected"
+    icon_state("connected", "Connected")
     assert not window.control_busy
 
     # IP responses from before a Connect/Disconnect cannot overwrite the exit
@@ -318,7 +437,7 @@ try:
     log = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
     assert "198.51.100" not in log and "203.0.113" not in log
     assert all("ip" not in key for key in window.preferences.data)
-    print("GTK checks passed: existing actions, resize, public IP, kill switch, startup enable/update/disable, boot-job interlock, failure recovery and authorization cancellation.")
+    print("GTK checks passed: existing actions, scrolling server picker, resize, public IP, kill switch and reconnect, startup enable/update/disable, boot-job interlock, failure recovery and authorization cancellation.")
 finally:
     if app.window and app.window.alive:
         app.window.destroy()

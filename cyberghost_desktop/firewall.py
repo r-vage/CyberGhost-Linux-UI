@@ -214,15 +214,16 @@ def serve(listener, firewall, runtime):
             return
 
 
-def authorized_action(action, runtime=RUNTIME, firewall=None):
+def authorized_action(action, runtime=RUNTIME, firewall=None, *, _lock=None):
     if os.geteuid() != 0 or action not in {"enable", "disable"}:
         raise RuntimeError("Run a fixed firewall action through administrator authorization.")
     secure_runtime(runtime)
-    lock = os.open(runtime / "action.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    lock = _lock if _lock is not None else os.open(runtime / "action.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         # Serialize independently launched authorization helpers, including two
         # desktops/users acting at once. The monitor does not inherit this lock.
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        if _lock is None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             return request(action, runtime)
         except (FileNotFoundError, ConnectionRefusedError):
@@ -263,7 +264,8 @@ def authorized_action(action, runtime=RUNTIME, firewall=None):
                     os._exit(0)
             return result
     finally:
-        os.close(lock)
+        if _lock is None:
+            os.close(lock)
 
 
 def main():

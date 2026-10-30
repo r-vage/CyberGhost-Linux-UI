@@ -1,0 +1,8 @@
+Country flags from flag-icons by Panayiotis Lipiridis, licensed under MIT.
+Release: v7.6.0
+https://github.com/lipis/flag-icons/releases/tag/v7.6.0
+Source: flags/4x3/*.svg (two-letter filenames), copied without modification.
+Archive: https://api.github.com/repos/lipis/flag-icons/tarball/v7.6.0
+Archive SHA-256: e6718c0e6cb97362c33c086f8083e46d0e770d644cf046b3bbf8988408ef7250
+The upstream copyright and permission notice is in LICENSE beside these files.
+These files are bundled for offline display; the app does not download flags.

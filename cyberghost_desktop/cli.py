@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 import os
+from pathlib import Path
 import pwd
 import re
 import shlex
@@ -93,6 +94,8 @@ def parse_choices(text: str, kind: str) -> list[Choice]:
         if kind == "city" and row.get("instance", "").isdigit():
             suffix = f" · {row['instance']} servers" + suffix
         choices[value] = Choice(value, value + suffix, load)
+    if kind == "server":
+        return sorted(choices.values(), key=lambda item: (item.load is None, item.load or 0, item.value.casefold()))
     return sorted(choices.values(), key=lambda item: item.value.casefold())
 
 
@@ -162,7 +165,8 @@ class CyberGhostClient:
         self.binary = binary or shutil.which("cyberghostvpn")
         self.run = run
 
-    def _call(self, args: list[str], *, privileged: bool = False) -> str:
+    def _call(self, args: list[str], *, privileged: bool = False, connection_selection: Selection | None = None,
+              vpn_only: bool = False, replace_existing: bool = False) -> str:
         if not self.binary:
             raise CliError("CyberGhost CLI is not installed.", "Open Setup to install CyberGhost's Linux CLI, then click Check again.")
         command = [self.binary, *args]
@@ -181,6 +185,24 @@ class CyberGhostClient:
             # Keep pkexec's sanitized environment; only add these fixed keys.
             command = [pkexec, "--disable-internal-agent", "/usr/bin/env",
                        f"SUDO_USER={username}", "LC_ALL=C", "LANG=C", *command]
+            if connection_selection is not None and (vpn_only or replace_existing):
+                helper = Path(__file__).with_name("protected_connect.py").resolve()
+                if not helper.is_file():
+                    raise CliError("Protected reconnect helper is missing. Quit the app from the tray and reopen it after moving or updating the app.")
+                command = [pkexec, "--disable-internal-agent", "/usr/bin/python3", "-I", str(helper),
+                           json.dumps({"selection": asdict(connection_selection), "vpn_only": vpn_only, "replace_existing": replace_existing})]
+            # Only installed, root-owned helpers are eligible for short-lived
+            # polkit retention. The generic interpreter action is unchanged.
+            from .authorization import control_command
+            if args == ["--stop"]:
+                cached = control_command(pkexec, "disconnect", {})
+            elif connection_selection is not None:
+                cached = control_command(pkexec, "connect", {"selection": asdict(connection_selection),
+                                         "vpn_only": vpn_only, "replace_existing": replace_existing})
+            else:
+                cached = None
+            if cached is not None:
+                command = cached
         try:
             result = self.run(
                 command, capture_output=True, text=True, errors="replace",
@@ -282,8 +304,12 @@ class CyberGhostClient:
             return []
         return parse_choices(self._call(selection.location_args() + ["--server"]), "server")
 
-    def connect(self, selection: Selection) -> str:
-        return self._call(selection.connect_args(), privileged=True)
+    def connect(self, selection: Selection, *, vpn_only: bool = False, replace_existing: bool = False) -> str:
+        if vpn_only and selection.protocol != "wireguard":
+            raise CliError("Select WireGuard to connect while VPN only is enabled.")
+        return self._call(selection.connect_args(), privileged=True,
+                          connection_selection=selection,
+                          vpn_only=vpn_only, replace_existing=replace_existing)
 
     def disconnect(self) -> str:
         return self._call(["--stop"], privileged=True)
@@ -315,8 +341,12 @@ class DemoClient:
     def status(self) -> Status:
         return Status("connected" if self.connected else "disconnected", "Demo mode: your actual VPN is unchanged.")
 
-    def connect(self, selection: Selection) -> str:
+    def connect(self, selection: Selection, *, vpn_only: bool = False, replace_existing: bool = False) -> str:
         selection.connect_args()
+        self.last_vpn_only = vpn_only
+        self.last_replace_existing = replace_existing
+        if replace_existing:
+            self.disconnect()
         self.connected = True
         return "Demo connection completed. No network settings were changed."
 

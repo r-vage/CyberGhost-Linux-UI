@@ -1,15 +1,14 @@
 # CyberGhost-Linux-UI
 
 A small native Linux desktop app for the CyberGhost VPN command line client.
-Built with Python and GTK 3. This is an independent, unofficial project, separate
-from ComfyUI, Eclipse and the Nova node packs. CyberGhost is a trademark of its
+Built with Python and GTK 3. This is an independent, unofficial project. CyberGhost is a trademark of its
 owner; this project is not affiliated with CyberGhost.
 
 ![CyberGhost Desktop in demo mode](docs/desktop.png)
 
 ## What it does
 
-- Search live country lists, streaming services and P2P locations.
+- Search live country lists, streaming services and P2P locations, with bundled country flags that work offline.
 - Save favorite locations and remember your protocol and transport choices.
 - Choose automatic city/server selection or an individual server with its reported load.
 - Connect with WireGuard or OpenVPN; choose UDP or TCP for OpenVPN.
@@ -18,9 +17,10 @@ owner; this project is not affiliated with CyberGhost.
 - Optionally block traffic outside CyberGhost with a WireGuard kill switch.
 - Optionally connect a saved location during boot with one-time authorized setup,
   and open the desktop app when you sign in.
-- Use the optional desktop tray to reopen the window or disconnect. The app's
-  shield shows a green arrow when connected, a red cross when disconnected, and
-  an amber question mark while changing connections or when status is unknown.
+- Use the optional desktop tray to reopen the window or disconnect. The same app
+  shield in the connection panel and tray shows a green arrow when connected, a
+  red cross when disconnected, and an amber question mark while changing
+  connections or when status is unknown.
 - Preview the exact command or try the interface with `--demo`.
 - Install and configure the official CLI through a guided Setup screen.
 
@@ -279,6 +279,26 @@ journalctl -u "cyberghost-desktop-startup-$(id -u).service" -b
 
 ![Startup settings in demo mode](docs/startup.png)
 
+### Server changes and authorization
+
+While connected, choose another country, city, server or protocol. **Connect**
+becomes available for the changed destination. Clicking it disconnects the current
+VPN, verifies that it stopped, then establishes the selected connection in one
+authorized action. Changing the selection alone does not disconnect anything.
+
+To avoid repeated password dialogs, open **Setup → Optional · Remember
+authorization → Enable**. This installs an app-specific polkit policy and a fixed,
+root-owned helper. Linux can then retain authorization briefly—typically about
+five minutes—for Connect, Disconnect and VPN-only controls. The timeout is managed
+by polkit and may differ with system policy; this does not reuse or change sudo's
+terminal cache. The app never stores your password.
+
+After updating the project, Setup offers **Update** when the installed helper no
+longer matches the app. Updating or removing it requires fresh authorization.
+Use **Remove** in that section before deleting the project if you also want to
+remove this optional system integration. Without it, the app continues to request
+authorization for each change. No global password-free sudo/Python rule is added.
+
 ### Optional WireGuard kill switch
 
 **VPN only (WireGuard)** is off by default. Connect with WireGuard, then enable it
@@ -294,8 +314,14 @@ namespaces that manage their own network interfaces.
 
 Protection **stays enabled after Disconnect or Quit**, until you turn it off or
 reboot. The optional startup setting can enable it again after the next boot's
-VPN connection. Turn it off before connecting to a different server: CyberGhost needs
-direct access to set up a new connection. The app does not silently disable it.
+VPN connection. Leave it checked when changing servers: **Connect** establishes the
+next WireGuard connection while keeping ordinary traffic blocked. Linux authorizes
+the connection once; there is no separate protection toggle. A temporary exception
+is restricted to CyberGhost's connection process and is removed after success or
+failure. Protected reconnects require cgroup v2 and the `unshare`, `mount` and
+`nsenter` tools from util-linux, plus configured uplink DNS servers. If setup fails,
+protection stays enabled. Saved locations and previously loaded servers remain
+available offline; use Automatic for a new choice, then Refresh after connecting.
 It is not a boot-time firewall or an automatic reconnect feature.
 
 A small authorized helper checks the actual firewall rules so status refreshes
@@ -307,8 +333,9 @@ and enable it again. If the app is unavailable, this command removes only its ta
 sudo nft delete table inet cyberghost_desktop
 ```
 
-The helper exits when the option is disabled. No password, sudoers exception or
-custom polkit authorization policy is stored.
+The firewall monitor exits when VPN only is disabled. No password or sudoers
+exception is stored. A custom polkit policy is installed only if you separately
+enable **Remember authorization** in Setup.
 
 Keyboard shortcuts: **Ctrl+F** search, **F5** refresh, **Ctrl+Q** quit.
 
@@ -325,6 +352,7 @@ window is open. Demo mode neither reads nor writes normal preferences.
 /usr/bin/python3 tests/gui_smoke.py
 /usr/bin/python3 tests/gui_setup.py
 /usr/bin/python3 tests/gui_startup_wait.py
+/usr/bin/python3 tests/gui_server_loading.py
 # Kernel checks in disposable user/network namespaces; never the host firewall:
 /usr/bin/python3 tests/firewall_namespace.py
 ```
@@ -337,3 +365,8 @@ Privileged commands stay asynchronous and are not killed midway through VPN chan
 See [implementation and validation notes](docs/implementation.md) for the tested
 CLI commands and limits. A CyberGhost subscription and working official client
 are still required; this app does not supply a VPN service.
+
+Country flags are from [flag-icons](https://github.com/lipis/flag-icons) by
+Panayiotis Lipiridis, used under the MIT license. The bundled flags include the
+[upstream license](cyberghost_desktop/assets/flags/LICENSE) and
+[source details](cyberghost_desktop/assets/flags/SOURCE.txt).

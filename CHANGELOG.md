@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — 2026-10-30
+
+- Add bundled country flags to the location list for offline display, with country-code fallback. Reuse the tray's connected, disconnected and unknown-state shield icons in the connection panel, keeping both indicators synchronized during connection changes and boot startup.
+- Replace the oversized server dropdown with a compact scrolling picker that preserves the selected server. Keep Automatic first, sort servers by lowest load, and put unknown loads last. Show loading/refresh status inside the list, display saved servers immediately while refreshing, and resume deferred server requests after reconnecting.
+- Enable Connect when the selected destination changes; disconnect and verify the old connection before starting the new one in a single authorized action. Allow WireGuard reconnects and server changes while VPN-only stays enabled. A temporary exception covers only the isolated CyberGhost connection process; other traffic remains blocked, including on connection failure. Reuse saved locations and cached server choices while disconnected.
+- Add optional authorization caching in Setup: an app-specific polkit action retains VPN-control authorization briefly, typically about five minutes. Its fixed root-owned helper supports only connection and VPN-only changes; installation and updates require fresh authorization.
+- Fix protected reconnects on systems where `/run` is mounted `noexec`: make only the private DNS wrapper executable so `resolvectl`/`resolvconf` can finish WireGuard setup. Preserve actual CLI failure output, including failures that exit successfully. VPN-only protection stays enabled.
+- Detect missing firewall helpers after moving or renaming the app folder and show restart guidance. Preserve useful helper error details instead of incorrectly suggesting missing dependencies.
+
 ## 0.1.0 — 2026-10-30
 
 - Repository and Python distribution named `CyberGhost-Linux-UI`; existing app launchers, preferences and service identifiers remain compatible.

@@ -87,6 +87,21 @@ class FirewallTests(unittest.TestCase):
         with patch("cyberghost_desktop.firewall.os.geteuid", return_value=0), self.assertRaises(RuntimeError):
             authorized_action("shell")
 
+    def test_disable_after_disconnect_does_not_require_wireguard(self):
+        firewall = Firewall()
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            (runtime / "active").touch()
+            with (patch("cyberghost_desktop.firewall.os.geteuid", return_value=0),
+                  patch("cyberghost_desktop.firewall.secure_runtime"),
+                  patch("cyberghost_desktop.firewall.request", side_effect=FileNotFoundError),
+                  patch.object(firewall, "wireguard_mark", side_effect=AssertionError("VPN disconnected")),
+                  patch.object(firewall, "document", return_value=document()),
+                  patch.object(firewall, "command") as command):
+                self.assertEqual(authorized_action("disable", runtime, firewall).state, "off")
+            command.assert_called_once_with("nft", "delete", "table", "inet", TABLE)
+            self.assertFalse((runtime / "active").exists())
+
     def test_socket_allows_unprivileged_status_but_never_mutation(self):
         for action in ("status", "enable", "disable", "run command"):
             with self.subTest(action=action):
@@ -137,6 +152,33 @@ class GuardClientTests(unittest.TestCase):
                 patch("cyberghost_desktop.vpn_guard.subprocess.run", return_value=subprocess.CompletedProcess([], 126, "", "")):
             with self.assertRaisesRegex(CliError, "cancelled"):
                 VPNGuard().change(True)
+
+    def test_moved_app_reports_missing_helper_before_authorization(self):
+        with (tempfile.TemporaryDirectory() as directory,
+              patch("cyberghost_desktop.vpn_guard.__file__", str(Path(directory) / "old-folder" / "vpn_guard.py")),
+              patch("cyberghost_desktop.vpn_guard.shutil.which", return_value="/usr/bin/pkexec"),
+              patch("cyberghost_desktop.vpn_guard.subprocess.run") as run):
+            with self.assertRaisesRegex(CliError, "quit the app from the tray and reopen") as error:
+                VPNGuard().change(False)
+            self.assertIn("old-folder/firewall.py", error.exception.details)
+            run.assert_not_called()
+
+    def test_helper_failure_preserves_diagnostic(self):
+        result = subprocess.CompletedProcess([], 2, "", "python: cannot open firewall.py")
+        with (patch("cyberghost_desktop.vpn_guard.shutil.which", return_value="/usr/bin/pkexec"),
+              patch("cyberghost_desktop.vpn_guard.subprocess.run", return_value=result)):
+            with self.assertRaisesRegex(CliError, "exit 2") as error:
+                VPNGuard().change(False)
+            self.assertEqual(error.exception.details, result.stderr)
+
+    def test_invalid_helper_response_is_not_success(self):
+        for output in ('[]', '{"state":"off"}', '{"state":"bad","detail":"Verified"}'):
+            result = subprocess.CompletedProcess([], 0, output, "")
+            with (self.subTest(output=output),
+                  patch("cyberghost_desktop.vpn_guard.shutil.which", return_value="/usr/bin/pkexec"),
+                  patch("cyberghost_desktop.vpn_guard.subprocess.run", return_value=result),
+                  self.assertRaisesRegex(CliError, "invalid")):
+                VPNGuard().change(False)
 
     def test_demo_never_reads_runtime_or_invokes_commands(self):
         with patch("cyberghost_desktop.vpn_guard.request", side_effect=AssertionError("real status")), \

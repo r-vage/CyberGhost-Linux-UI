@@ -35,6 +35,10 @@ window.cyberghost, dialog.cyberghost { background: #12161c; color: #eef1f5; }
 .cyberghost entry image { color: #a9b4c4; }
 .cyberghost combobox button { padding: 9px; }
 .cyberghost combobox:disabled button { color: #778497; }
+.cyberghost button.server-picker { padding: 9px; }
+popover.server-menu { background: #181e27; color: #eef1f5; border: 1px solid #3b4758; }
+popover.server-menu treeview { background: #181e27; color: #eef1f5; }
+popover.server-menu treeview:selected { background: #383324; color: #ffda7b; }
 .cyberghost list.locations { background: transparent; }
 .cyberghost list.locations row { border-radius: 8px; margin: 2px 8px; padding: 12px 10px; border: 1px solid transparent; }
 .cyberghost list.locations row:hover { background: #252e3b; }

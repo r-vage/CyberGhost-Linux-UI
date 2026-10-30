@@ -17,6 +17,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cyberghost_desktop.firewall import Firewall, TABLE, authorized_action, request  # noqa: E402
+from cyberghost_desktop.protected_connect import connection_rule, remove_exception  # noqa: E402
 
 
 def run(*args, source=None):
@@ -162,6 +163,25 @@ def inner(original_namespace):
             blocked("10.200.0.2")
             forwarded("10.200.0.2", False)
             assert request("status", runtime).state == "on", "Protection must survive a vanished tunnel"
+            # Exercise the actual kernel cgroup socket match. This namespace has
+            # no route to the host/internet and never changes host cgroups.
+            group = next(line[3:].lstrip('/') for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::'))
+            guard = Firewall()
+            # A different cgroup's exception must not allow even this root
+            # process's IPv4/IPv6 traffic. Only the selected group may connect.
+            if Path('/sys/fs/cgroup/init.scope').is_dir():
+                run("nft", "-f", "-", source=connection_rule('init.scope'))
+                blocked("198.18.0.2")
+                blocked("fd18::2")
+                remove_exception(guard, 'init.scope')
+            run("nft", "-f", "-", source=connection_rule(group))
+            send_datagram("198.18.0.2")
+            send_datagram("fd18::2")
+            forwarded("198.18.0.2", False)
+            remove_exception(guard, group)
+            blocked("198.18.0.2")
+            blocked("fd18::2")
+            assert request("status", runtime).state == "on", "Removing the exception must restore the original rules"
             assert authorized_action("disable", runtime).state == "off"
             send_datagram("198.18.0.2")
             send_datagram("fd18::2")

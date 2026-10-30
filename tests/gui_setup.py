@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cyberghost_desktop.app import Application, Gio, GLib, Gtk  # noqa: E402
+from cyberghost_desktop.authorization import AuthorizationStatus  # noqa: E402
 from cyberghost_desktop.cli import DemoClient  # noqa: E402
 from cyberghost_desktop.preferences import Preferences  # noqa: E402
 from cyberghost_desktop.public_ip import PublicIP  # noqa: E402
@@ -122,6 +123,26 @@ with (patch("cyberghost_desktop.app.inspect_installation", side_effect=lambda: s
         window._pool.shutdown(wait=True)
         controlled = ControlledExecutor()
         window._pool = controlled
+        # Authorization caching is an explicit setup action, never an
+        # automatic installation and never a VPN connection side effect.
+        auth_state = AuthorizationStatus('off', 'Ask for each action')
+        with (patch('cyberghost_desktop.setup_dialog.authorization.status', side_effect=lambda: auth_state),
+              patch('cyberghost_desktop.setup_dialog.authorization.configure', return_value=None) as configure):
+            dialog.recheck()
+            assert dialog.retention_enable.get_sensitive()
+            assert not dialog.retention_disable.get_sensitive()
+            dialog.retention_enable.emit('clicked')
+            assert dialog.busy and not dialog.close_button.get_sensitive()
+            auth_state = AuthorizationStatus('ready', 'Remember briefly')
+            controlled.drain()
+            configure.assert_called_once_with(True)
+            assert not dialog.busy and not dialog.retention_enable.get_sensitive()
+            assert dialog.retention_disable.get_sensitive()
+            dialog.retention_disable.emit('clicked')
+            auth_state = AuthorizationStatus('off', 'Ask for each action')
+            controlled.drain()
+            assert configure.call_args.args == (False,)
+            assert dialog.retention_enable.get_sensitive()
         state = replace(state, cli="/usr/bin/cyberghostvpn")
         dialog.check_button.emit("clicked")
         assert client.binary == state.cli, "CLI must be redetected without an app restart"

@@ -16,7 +16,7 @@ real UID and system account record. CyberGhost CLI 1.5.0 uses that name to locat
 its existing configuration; without it, pkexec's root identity points at
 `/home/root/.cyberghost/config.ini`. Only this identity and the C locale are added
 to pkexec's sanitized environment. The app does not copy or read VPN credentials.
-No custom polkit policy, sudoers rule or stored password is installed.
+No sudoers rule or stored password is installed. The separate optional authorization-retention setting installs an app-specific polkit policy.
 Enabling the optional kill switch starts a small root status helper for that session.
 Enabling the separate startup option installs an explicitly authorized boot service.
 The command preview is display-only and is not executed through a shell.
@@ -102,9 +102,29 @@ than assuming off. Disable works without an active tunnel or running helper.
 The monitor exits on disable; reboot removes the transient rules/runtime data.
 No setup files or firewall configuration are installed persistently.
 
-The UI never turns protection off on disconnect, close or reconnect. A new Connect
-requires protection to be explicitly disabled first, since the CLI needs its API
-and DNS to create a tunnel. OpenVPN is outside this option's supported scope.
+The UI never turns protection off on disconnect, close or reconnect. A protected
+WireGuard Connect uses one polkit-authorized helper. It creates a private root-owned
+cgroup v2 for the CLI and inserts a temporary output exception matching only that
+cgroup's root sockets. Existing output/forward drop policies stay in place. The
+helper serializes with other firewall changes, verifies the new interface and
+route, refreshes the WireGuard transport mark, and removes its exception on success
+or failure. Cleanup restores the previous rule fingerprint after a failed attempt.
+
+The CLI gets a private mount namespace with its configured uplink DNS servers and
+`hosts: files dns`, preventing system-resolver requests from other applications from
+escaping through the exception. Any shared nscd socket is hidden in that namespace.
+WireGuard's resolvconf/resolvectl updates re-enter the original mount namespace, so
+the tunnel still configures the host's DNS. No global resolver file is replaced.
+Unavailable cgroup/namespace/DNS support fails without disabling protection.
+`tests/reconnect_namespace.py` verifies the resolver isolation and DNS updater
+forwarding with inert executables in fresh user, network and mount namespaces.
+`tests/firewall_namespace.py` checks the real nftables cgroup match, IPv4/IPv6
+blocking and restoration of the original rule fingerprint.
+The reconnect helper supports the existing root monitor's enable/status protocol;
+the monitor does not need to be stopped or upgraded just to reconnect. Catalogue
+requests use saved locations and in-memory city/server choices while disconnected;
+fresh lists can be requested after the new tunnel is up. OpenVPN is outside this
+option's supported scope.
 Existing firewall managers can impose additional restrictions; a root administrator
 can also change/remove these rules. This is not a boot-time or privileged-process
 containment mechanism.
@@ -215,7 +235,7 @@ and its active IPv4 route. No connection/disconnection was performed for that ch
 
 ## Checks
 
-- 106 standard-library unit tests: parsers, command construction, no shell use,
+- Standard-library unit tests: parsers, command construction, no shell use,
   invoking-account preservation through simulated polkit environment sanitization,
   authorization cancellation, timeouts, demo isolation, private preferences,
   launcher installation/removal, ZIP scripts without executable permissions, moved
@@ -280,6 +300,7 @@ and its active IPv4 route. No connection/disconnection was performed for that ch
 - [polkit pkexec authorization and exit codes](https://www.freedesktop.org/software/polkit/docs/0.110/pkexec.1.html)
 - [nftables rules, atomic transactions and interface matching](https://netfilter.org/projects/nftables/manpage.html)
 - [WireGuard routing and kill-switch guidance](https://git.zx2c4.com/wireguard-tools/about/src/man/wg-quick.8)
+- [nftables socket cgroup matching](https://www.netfilter.org/projects/nftables/manpage.html)
 - [systemd service lifecycle](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)
 - [Desktop application autostart specification](https://specifications.freedesktop.org/autostart/latest/)
 - [PyGObject distro installation guidance](https://pygobject.gnome.org/getting_started.html)
@@ -290,14 +311,22 @@ Cinnamon and has Ayatana AppIndicator bindings; other desktops may need an
 indicator extension or `--no-tray`. GTK 3 is used because its system bindings are
 already installed here. The launcher deliberately avoids the ComfyUI environment.
 
-The tray uses packaged SVG variants of the app shield: green arrow for a verified
-connection, red cross for disconnection, and amber question mark for unknown status
-or an ongoing connection change/boot job. A textual description accompanies the
-icon. Firewall/startup-setting changes alone do not replace the connection state.
+The connection panel and tray share packaged SVG variants of the app shield:
+green arrow for a verified connection, red cross for disconnection, and amber
+question mark for unknown status or an ongoing connection change/boot job. Both
+use the same state/description helper. A tooltip and accessible description
+accompany the panel icon. Firewall/startup-setting changes alone do not replace
+the connection state.
 Demo indicators use a separate ID and clearly marked descriptions. Icons were
 rendered at 16/24/32/96 pixels on light and dark backgrounds, and loaded through the
 actual AppIndicator/GTK APIs in an isolated demo session; no real VPN changes were
 performed for these checks.
+
+The location list loads small SVG country flags from the packaged
+`assets/flags` directory, with the country name/code exposed to accessibility
+tools and a country-code badge if a flag is unavailable. The complete two-letter
+4:3 set from flag-icons is bundled with its MIT license and source information;
+flags require no network access. Package data includes the SVGs and notices.
 
 The distro review also compared shell/package-manager detection in the user's
 ComfyUI Linux installer. This app launches with POSIX sh rather than depending on
@@ -309,3 +338,71 @@ Actual runtime verification remains on Linux Mint, with other distro environment
 simulated in tests. CyberGhost's vendor-supported CLI list and the app's Python
 minimum are separate requirements; no end-to-end compatibility is claimed for
 Arch, openSUSE, immutable systems or containers without a working vendor CLI.
+
+
+## Optional authorization retention
+
+Setup can install a fixed helper snapshot under
+`/usr/local/libexec/cyberghost-desktop/control` and the dedicated
+`io.github.rvage.CyberGhostDesktop.control` polkit action. Only active-session VPN
+controls use `auth_admin_keep`; the generic `org.freedesktop.policykit.exec` policy
+and sudo configuration are untouched. Polkit owns the short retention period.
+
+The executable annotation names the fixed root-owned launcher, never a general
+interpreter. Its dispatcher accepts only validated connect selections, disconnect,
+and boolean VPN-only changes. The caller account comes from `PKEXEC_UID`; the CLI
+and installed modules must be root-owned and not writable by ordinary users.
+Protected connections use the same scoped reconnect implementation described above.
+Server switches verify disconnection before starting the new connection.
+
+Installation/update/removal runs through a separate, non-cached authorization.
+The GUI checks ownership and source hashes before using the installed snapshot;
+outdated or missing helpers fall back to ordinary per-action authorization. Setup
+offers an update or removal. Tests use temporary installation directories and
+mocked authorization; they do not install policies on the development host.
+
+- [Polkit authorization retention and action scope](https://polkit.pages.freedesktop.org/polkit/polkit.8.html)
+- [pkexec executable annotations](https://polkit.pages.freedesktop.org/polkit/pkexec.1.html)
+
+
+### Reconnect error reporting
+
+CyberGhost CLI 1.5.0 has failure branches that exit with status zero, including
+WireGuard setup and unavailable-server failures. A zero exit is therefore not
+proof of a working connection. The protected helper verifies the interface,
+route and WireGuard mark before refreshing protection. If verification fails,
+Activity retains the captured CLI output instead of replacing it with advice
+to enable VPN only. Monitor-verification failures retain the connection output
+as well. The temporary cgroup exception is removed in both cases.
+
+The reconnect namespace test now runs the system's actual `wg-quick` against a
+temporary configuration and dummy peer. It verifies the resulting interface,
+IPv4 route, firewall mark and DNS-update calls inside isolated network and mount
+namespaces. It does not exercise CyberGhost's live account or VPN endpoints.
+
+
+The runtime directory can be on a `noexec` `/run` filesystem. A plain bind mount
+inherits that flag, so the DNS wrapper previously failed with permission denied;
+`wg-quick` then removed the new interface. The wrapper's **private bind target**
+now receives `remount,bind,ro,exec,nosuid,nodev`. This permits that root-owned
+wrapper to execute without changing `/run` or the host DNS executable. The
+namespace test reproduces the permission error before the fix and verifies the
+complete WireGuard startup afterward, while confirming that the runtime source
+remains `noexec` and the parent executable remains unchanged.
+
+Reference: [mount's per-mount bind flags](https://man7.org/linux/man-pages/man8/mount.8.html).
+
+
+### Server list loading
+
+City totals arrive separately from individual server entries. The server popup
+shows a loading indicator during the first fetch. Returning to a previously viewed
+city displays its cached entries immediately while refreshing loads in the
+background. A refresh preserves a still-present selected server and replaces rows
+without duplication. Stale responses cannot clear a newer loading indicator.
+
+While disconnected with VPN-only enabled, uncached server lists are deferred
+instead of saved as empty lists. Once connection status confirms the new tunnel,
+the selected city's pending list is fetched automatically. A failed refresh keeps
+its cached entries and identifies the failure. `tests/gui_server_loading.py` checks
+these cases with controlled futures and the real GTK widgets.

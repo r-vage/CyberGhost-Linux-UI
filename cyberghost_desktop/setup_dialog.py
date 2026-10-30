@@ -5,7 +5,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
-from . import setup_tasks  # noqa: E402
+from . import authorization, setup_tasks  # noqa: E402
 from .linux_support import dependency_help, distribution_name  # noqa: E402
 
 
@@ -77,6 +77,21 @@ class SetupDialog(Gtk.Dialog):
         self.account_button.connect("clicked", lambda *_: self._start("account"))
         account.pack_start(self.account_button, False, False, 0)
 
+        retention = self._card(content, "OPTIONAL · REMEMBER AUTHORIZATION")
+        retention.pack_start(text_label("Linux can remember VPN authorization briefly, typically about five minutes. "
+                                         "Connect, Disconnect and VPN-only changes then reuse it. Passwords stay in the Linux dialog. "
+                                         "Setup installs a fixed, root-owned helper and an app-specific polkit policy.", "muted"), False, False, 0)
+        self.retention_status = text_label("", "muted")
+        retention.pack_start(self.retention_status, False, False, 0)
+        actions = Gtk.Box(spacing=10)
+        self.retention_enable = Gtk.Button(label="Enable")
+        self.retention_disable = Gtk.Button(label="Remove")
+        self.retention_enable.connect("clicked", lambda *_: self._configure_retention(True))
+        self.retention_disable.connect("clicked", lambda *_: self._configure_retention(False))
+        actions.pack_start(self.retention_enable, False, False, 0)
+        actions.pack_start(self.retention_disable, False, False, 0)
+        retention.pack_start(actions, False, False, 0)
+
         manual = Gtk.Expander(label="Manual commands and missing dependencies")
         instructions = text_label(
             "From the extracted CyberGhost download folder:\nsudo bash install.sh\n\n"
@@ -103,6 +118,8 @@ class SetupDialog(Gtk.Dialog):
     def recheck(self):
         if self.busy:
             return
+        self.retention = authorization.status()
+        self.retention_status.set_text(self.retention.detail)
         self.installation = setup_tasks.inspect_installation()
         state = self.installation
         self.cli_status.set_text(f"CLI installed · {state.cli}" if state.cli else "CLI not installed")
@@ -120,8 +137,28 @@ class SetupDialog(Gtk.Dialog):
         else:
             self.notice.set_text("After setup finishes, press Enter in the terminal, then check the status here. Nothing connects automatically.")
 
+    def _configure_retention(self, enabled):
+        if self.busy or self.owner.control_busy:
+            return
+        self.busy = True
+        self.notice.set_text("Authorize the authorization-helper change in the Linux dialog…")
+        self._sync()
+        self.owner._sync_controls()
+        def finished(_result=None):
+            self.busy = False
+            self.recheck()
+            self.owner._sync_controls()
+        def failed(error):
+            finished()
+            self.notice.set_text(str(error))
+            self.owner._append_log(str(error))
+        self.owner._submit("authorization-setup", lambda: authorization.configure(enabled), finished, failed)
+
     def _sync(self):
         state = self.installation
+        self.retention_enable.set_label("Update" if self.retention.state in {"outdated", "unavailable"} else "Enable")
+        self.retention_enable.set_sensitive(not self.busy and bool(state.pkexec) and self.retention.state != "ready")
+        self.retention_disable.set_sensitive(not self.busy and bool(state.pkexec) and self.retention.state != "off")
         usable = bool(state.terminal and state.sudo) and not self.busy
         self.install_button.set_sensitive(usable)
         self.account_button.set_sensitive(usable and bool(state.cli))
