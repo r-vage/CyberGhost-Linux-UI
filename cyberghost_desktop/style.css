@@ -1,0 +1,52 @@
+window.cyberghost, dialog.cyberghost { background: #12161c; color: #eef1f5; }
+.cyberghost headerbar { background: #181d25; border-bottom: 1px solid #303846; box-shadow: none; }
+.cyberghost headerbar .title { font-size: 16px; font-weight: 700; }
+.cyberghost headerbar .subtitle { color: #9ba8b9; font-size: 11px; }
+.cyberghost .sidebar { background: #181d25; border-right: 1px solid #303846; }
+.cyberghost .eyebrow { color: #9ba8b9; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+.cyberghost .heading { font-size: 23px; font-weight: 700; }
+.cyberghost .muted { color: #a9b4c4; font-size: 12px; }
+.cyberghost .caption { color: #9ba8b9; font-size: 11px; }
+.cyberghost .status-card { background: #1c232d; border: 1px solid #344153; border-radius: 16px; padding: 24px; }
+.cyberghost .status-title { font-size: 31px; font-weight: 700; }
+.cyberghost .status-chip { color: #a9b4c4; font-size: 11px; font-weight: 700; }
+.cyberghost .status-chip.connected { color: #6bd8ad; }
+.cyberghost .status-chip.disconnected { color: #f4c95c; }
+.cyberghost .status-symbol { color: #f4c95c; }
+.cyberghost .ip-value { color: #eef1f5; font-size: 14px; font-family: monospace; }
+.cyberghost paned > separator { min-width: 5px; background: #252d39; }
+.cyberghost .settings-card { background: #181e27; border: 1px solid #303846; border-radius: 12px; padding: 18px; }
+.cyberghost button { background: #242d3a; color: #eef1f5; border: 1px solid #3b4758; border-radius: 7px; padding: 7px 12px; box-shadow: none; text-shadow: none; }
+.cyberghost button:hover { background: #303d50; border-color: #63738b; }
+.cyberghost button:checked { background: #3d3523; color: #ffda7b; border-color: #a9873c; }
+.cyberghost button:disabled { color: #6e7b8e; background: #1c232d; border-color: #2c3542; }
+.cyberghost button.primary { background: #f4c95c; color: #171a20; border-color: #f4c95c; font-weight: 700; padding: 13px 25px; }
+.cyberghost button.primary:hover { background: #ffdc83; }
+.cyberghost button.primary:disabled { background: #3c3c34; border-color: #3c3c34; color: #858571; }
+.cyberghost button.danger { color: #f6a7a7; }
+.cyberghost button.danger:disabled { color: #6e7b8e; }
+.cyberghost button.flat { background: transparent; border-color: transparent; padding: 5px 8px; }
+.cyberghost button.flat:hover { background: #303a48; }
+.cyberghost checkbutton check { background: #131a23; border: 1px solid #64738b; border-radius: 4px; min-width: 15px; min-height: 15px; }
+.cyberghost checkbutton check:checked { background: #f4c95c; border-color: #f4c95c; color: #171a20; }
+.cyberghost checkbutton check:disabled { background: #1c232d; border-color: #3b4758; }
+.cyberghost entry { background: #11161e; color: #eef1f5; border: 1px solid #3b4758; border-radius: 7px; padding: 7px; box-shadow: none; }
+.cyberghost entry:focus { border-color: #f4c95c; }
+.cyberghost entry image { color: #a9b4c4; }
+.cyberghost combobox button { padding: 9px; }
+.cyberghost combobox:disabled button { color: #778497; }
+.cyberghost list.locations { background: transparent; }
+.cyberghost list.locations row { border-radius: 8px; margin: 2px 8px; padding: 12px 10px; border: 1px solid transparent; }
+.cyberghost list.locations row:hover { background: #252e3b; }
+.cyberghost list.locations row:selected { background: #383324; border-color: #726037; }
+.cyberghost .location-name { color: #eef1f5; font-size: 13px; font-weight: 600; }
+.cyberghost .country-code { background: #2c3747; color: #c5d0df; border-radius: 7px; padding: 9px; font-size: 11px; font-weight: 700; }
+.cyberghost separator { background: #303846; min-height: 1px; }
+.cyberghost .error { background: #3a2427; color: #ffc3c3; border: 1px solid #74454d; border-radius: 8px; padding: 10px; }
+.cyberghost .demo { background: #44391f; color: #ffe39b; border-radius: 6px; padding: 8px; }
+.cyberghost textview, .cyberghost textview text { background: #10151c; color: #b8c7da; font-family: monospace; font-size: 11px; }
+.cyberghost .command { font-family: monospace; font-size: 11px; color: #b9c8da; }
+.cyberghost scrollbar { background: transparent; }
+.cyberghost scrollbar slider { min-width: 5px; min-height: 28px; background: #485366; border-radius: 8px; }
+.cyberghost expander title { color: #a9b4c4; padding: 6px 0; }
+.cyberghost :focus { outline-color: #f4c95c; }
