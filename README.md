@@ -1,5 +1,7 @@
 # CyberGhost-Linux-UI
 
+**English** | **[Deutsch](README_DE.md)** | **[简体中文](README_ZH.md)**
+
 A small native Linux desktop app for the CyberGhost VPN command line client.
 Built with Python and GTK 3. This is an independent, unofficial project. CyberGhost is a trademark of its
 owner; this project is not affiliated with CyberGhost.
@@ -26,6 +28,8 @@ locations, connection controls, startup and setup.
   connections or when status is unknown.
 - Preview the exact command or try the interface with `--demo`.
 - Install and configure the official CLI through a guided Setup screen.
+- Switch between 15 interface languages from the language selector
+  in the window header, with editable translation files for additional languages.
 
 No connection starts on launch, location selection, preference restore or refresh.
 If you enable **Connect VPN during boot**, a separate boot service connects to
@@ -173,6 +177,27 @@ sh ./run.sh --no-tray    # Closing the window exits the app
 sh ./run.sh --setup      # Open guided CLI installation and account setup
 sh ./run.sh --check      # Show distro, dependency and boot-service capabilities
 ```
+
+## Language and translations
+
+Use the language selector at the top left of the window. The app includes Arabic,
+English, French, German, Hebrew, Italian, Japanese, Korean, Persian, Brazilian
+Portuguese, Russian, Spanish, Turkish, Simplified Chinese and Traditional Chinese.
+Each language appears under its native name. The interface updates immediately
+and remembers your choice. Switching languages preserves the selected location,
+protocol, server and VPN connection. Demo mode keeps the language choice in memory only.
+
+Translations are plain UTF-8 JSON files in
+[`cyberghost_desktop/locales`](cyberghost_desktop/locales). To contribute another
+language, copy `en.json`, change its language code and native name, translate the
+message values, and submit the new file in a pull request. New files are discovered
+when the app starts; missing translations fall back to English. See the
+[translation guide](docs/TRANSLATING.md) for the format, validation and preview steps.
+
+Country, city, service and server names supplied by the CLI remain unchanged.
+Raw CLI/system diagnostics remain in their original language. The official
+installer, Linux authorization dialogs and GTK's built-in file chooser controls
+use their own language settings.
 
 ## Update, move or uninstall
 
@@ -351,15 +376,17 @@ window is open. Demo mode neither reads nor writes normal preferences.
 
 The screenshots and [visual tour](docs/Visual_Tour.md) are captured from the
 real GTK interface using demo data. See [documentation captures](docs/implementation.md#documentation-captures)
-to regenerate them without ComfyUI or an active VPN.
+to regenerate them with demo data and no active VPN.
 
 ```sh
 /usr/bin/python3 -m unittest discover -s tests -v
+/usr/bin/python3 tools/check_translations.py --complete
 # Requires a graphical session, uses only an in-memory fake VPN:
 /usr/bin/python3 tests/gui_smoke.py
 /usr/bin/python3 tests/gui_setup.py
 /usr/bin/python3 tests/gui_startup_wait.py
 /usr/bin/python3 tests/gui_server_loading.py
+/usr/bin/python3 tests/gui_i18n.py
 # Kernel checks in disposable user/network namespaces; never the host firewall:
 /usr/bin/python3 tests/firewall_namespace.py
 ```

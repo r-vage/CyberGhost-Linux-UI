@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+import re
 import time
 
 import gi
@@ -14,6 +15,8 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 from . import __version__  # noqa: E402
 from .cli import CliError, CyberGhostClient, DemoClient, NetworkUnavailable, Selection, Status  # noqa: E402
 from .preferences import Preferences  # noqa: E402
+from .i18n import Translator, message as msg  # noqa: E402
+from .ui_strings import LocalizedCombo, UIStrings  # noqa: E402
 from .server_picker import ServerPicker  # noqa: E402
 from .public_ip import PublicIP, fetch_public_ip  # noqa: E402
 from .setup_dialog import SetupDialog  # noqa: E402
@@ -64,8 +67,8 @@ def location_flag(code, name):
     return widget
 
 
-def combo(options):
-    widget = Gtk.ComboBoxText()
+def combo(options, ui):
+    widget = LocalizedCombo(ui)
     for key, text in options:
         widget.append(key, text)
     widget.set_active(0)
@@ -77,10 +80,26 @@ def combo(options):
     return widget
 
 
+def choice_label(choice):
+    # Translate only the adapter's display suffix; CLI identifiers stay verbatim.
+    suffix = choice.label.removeprefix(choice.value)
+    match = re.fullmatch(r"(?: · (\d+) servers)?(?: · (\d+)% load)?", suffix)
+    if not match or not suffix:
+        return choice.label
+    count, load = match.groups()
+    if count and load:
+        return msg("{name} · {count} servers · {load}% load", name=choice.value, count=count, load=load)
+    if count:
+        return msg("{name} · {count} servers", name=choice.value, count=count)
+    return msg("{name} · {load}% load", name=choice.value, load=load)
+
+
 class MainWindow(Gtk.ApplicationWindow):
     def __init__(self, application, client, preferences):
         super().__init__(application=application, title="CyberGhost Desktop")
         self.client, self.preferences = client, preferences
+        self.ui = application.ui
+        self._translating = False
         self.installation = None if client.demo else inspect_installation()
         self.setup_dialog = None
         self._setup_idle = None
@@ -136,20 +155,29 @@ class MainWindow(Gtk.ApplicationWindow):
             self._setup_idle = GLib.idle_add(self._initial_setup)
 
     def _build(self):
-        header = Gtk.HeaderBar(title="CyberGhost Desktop", subtitle="A simple home for your Linux VPN", show_close_button=True)
+        label = self._label
+        header = self.ui(Gtk.HeaderBar(show_close_button=True), title="CyberGhost Desktop", subtitle="A simple home for your Linux VPN")
         self.set_titlebar(header)
         help_button = Gtk.Button.new_from_icon_name("help-about-symbolic", Gtk.IconSize.BUTTON)
-        help_button.set_tooltip_text("About and keyboard shortcuts")
+        self.ui.set(help_button, "tooltip-text", "About and keyboard shortcuts")
         help_button.connect("clicked", self._about)
         header.pack_end(help_button)
         self.refresh_button = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
-        self.refresh_button.set_tooltip_text("Refresh locations and connection status (F5)")
+        self.ui.set(self.refresh_button, "tooltip-text", "Refresh locations and connection status (F5)")
         self.refresh_button.connect("clicked", lambda *_: self.refresh())
         header.pack_end(self.refresh_button)
-        self.setup_button = Gtk.Button(label="Setup")
-        self.setup_button.set_tooltip_text("Install CyberGhost's CLI or configure your account")
+        self.setup_button = self.ui(Gtk.Button(), label="Setup")
+        self.ui.set(self.setup_button, "tooltip-text", "Install CyberGhost's CLI or configure your account")
         self.setup_button.connect("clicked", self._show_setup)
         header.pack_end(self.setup_button)
+
+        self.language = combo([(code, catalog.name) for code, catalog in self.ui.translator.catalogs.items()], self.ui)
+        self.language.set_hexpand(False)
+        self.language.set_active_id(self.ui.translator.language)
+        self.language.connect("changed", self._language_changed)
+        self.ui.set(self.language, "tooltip-text", "Language")
+        self.language.get_accessible().set_name(self.ui.translator.text("Language"))
+        header.pack_start(self.language)
 
         main = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.main_paned = main
@@ -162,14 +190,14 @@ class MainWindow(Gtk.ApplicationWindow):
         sidebar_top = box(margin=18)
         sidebar.pack_start(sidebar_top, False, False, 0)
         sidebar_top.pack_start(label("LOCATIONS", "eyebrow"), False, False, 0)
-        self.mode = combo([("traffic", "All locations"), ("streaming", "Streaming"), ("torrent", "P2P / Torrent")])
+        self.mode = combo([("traffic", "All locations"), ("streaming", "Streaming"), ("torrent", "P2P / Torrent")], self.ui)
         self.mode.set_active_id(self.preferences.data["mode"])
         self.mode.connect("changed", self._mode_changed)
         sidebar_top.pack_start(self.mode, False, False, 0)
-        self.search = Gtk.SearchEntry(placeholder_text="Search country or service")
+        self.search = self.ui(Gtk.SearchEntry(), placeholder_text="Search country or service")
         self.search.connect("search-changed", lambda *_: self._render_locations())
         sidebar_top.pack_start(self.search, False, False, 0)
-        self.favorites_only = Gtk.ToggleButton(label="★  Favorites")
+        self.favorites_only = self.ui(Gtk.ToggleButton(), label="★  Favorites")
         self.favorites_only.connect("toggled", lambda *_: self._render_locations())
         sidebar_top.pack_start(self.favorites_only, False, False, 0)
         self.location_list = styled(Gtk.ListBox(), "locations")
@@ -201,8 +229,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.error_box = styled(box(False, 12), "error")
         self.error_label = label("", wrap=True)
         self.error_box.pack_start(self.error_label, True, True, 0)
-        dismiss = styled(Gtk.Button(label="×"), "flat")
-        dismiss.set_tooltip_text("Dismiss message; details remain in Activity")
+        dismiss = styled(self.ui(Gtk.Button(), label="×"), "flat")
+        self.ui.set(dismiss, "tooltip-text", "Dismiss message; details remain in Activity")
         dismiss.connect("clicked", lambda *_: self.error_box.hide())
         self.error_box.pack_end(dismiss, False, False, 0)
         content.pack_start(self.error_box, False, False, 0)
@@ -232,15 +260,15 @@ class MainWindow(Gtk.ApplicationWindow):
             value.set_ellipsize(Pango.EllipsizeMode.END)
             value.set_max_width_chars(26)
             ip_row.attach(value, column, 1, 1, 1)
-        ip_row.set_tooltip_text("Checks via Cloudflare when connection state changes or you refresh. Addresses stay in memory. "
+        self.ui.set(ip_row, "tooltip-text", "Checks via Cloudflare when connection state changes or you refresh. Addresses stay in memory. "
                                 "An address from before the VPN is shown only if checked while disconnected.")
         card.pack_start(ip_row, False, False, 0)
         actions = box(False, 10)
-        self.connect_button = styled(Gtk.Button(label="Connect"), "primary")
-        self.connect_button.set_tooltip_text("Connect using the selected location. Linux will request administrator authorization.")
+        self.connect_button = styled(self.ui(Gtk.Button(), label="Connect"), "primary")
+        self.ui.set(self.connect_button, "tooltip-text", "Connect using the selected location. Linux will request administrator authorization.")
         self.connect_button.connect("clicked", lambda *_: self._control("connect"))
-        self.disconnect_button = styled(Gtk.Button(label="Disconnect"), "danger")
-        self.disconnect_button.set_tooltip_text("Disconnect the CyberGhost VPN using its official CLI.")
+        self.disconnect_button = styled(self.ui(Gtk.Button(), label="Disconnect"), "danger")
+        self.ui.set(self.disconnect_button, "tooltip-text", "Disconnect the CyberGhost VPN using its official CLI.")
         self.disconnect_button.connect("clicked", lambda *_: self._control("disconnect"))
         actions.pack_start(self.connect_button, False, False, 0)
         actions.pack_start(self.disconnect_button, False, False, 0)
@@ -249,9 +277,8 @@ class MainWindow(Gtk.ApplicationWindow):
         card.pack_start(actions, False, False, 0)
         self.operation_note = label("Authorization is handled by Linux. No password is stored here.", "caption", wrap=True)
         card.pack_start(self.operation_note, False, False, 0)
-        self.guard_toggle = Gtk.CheckButton(label="VPN only (WireGuard)")
-        self.guard_toggle.set_tooltip_text(
-            "Optional kill switch. Connect with WireGuard, then enable. Blocks direct IPv4, IPv6 and LAN traffic "
+        self.guard_toggle = self.ui(Gtk.CheckButton(), label="VPN only (WireGuard)")
+        self.ui.set(self.guard_toggle, "tooltip-text", "Optional kill switch. Connect with WireGuard, then enable. Blocks direct IPv4, IPv6 and LAN traffic "
             "if the VPN drops. Stays on after Disconnect or Quit, until disabled or reboot. "
             "Stays on while changing WireGuard servers. Requires nftables and Linux authorization.")
         self.guard_toggle.connect("toggled", self._guard_toggled)
@@ -267,8 +294,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.selected_title.set_max_width_chars(36)
         selected_text.pack_start(self.selected_title, False, False, 0)
         selected.pack_start(selected_text, True, True, 0)
-        self.favorite_button = Gtk.ToggleButton(label="☆")
-        self.favorite_button.set_tooltip_text("Save or remove this location from Favorites")
+        self.favorite_button = self.ui(Gtk.ToggleButton(), label="☆")
+        self.ui.set(self.favorite_button, "tooltip-text", "Save or remove this location from Favorites")
         self.favorite_button.connect("toggled", self._favorite_changed)
         selected.pack_end(self.favorite_button, False, False, 0)
         content.pack_start(selected, False, False, 0)
@@ -276,18 +303,18 @@ class MainWindow(Gtk.ApplicationWindow):
         settings = styled(box(spacing=14), "settings-card")
         content.pack_start(settings, False, False, 0)
         grid = Gtk.Grid(column_spacing=14, row_spacing=10)
-        self.protocol = combo([("wireguard", "WireGuard"), ("openvpn", "OpenVPN")])
+        self.protocol = combo([("wireguard", "WireGuard"), ("openvpn", "OpenVPN")], self.ui)
         self.protocol.set_active_id(self.preferences.data["protocol"])
-        self.protocol.set_tooltip_text("WireGuard is lightweight. OpenVPN offers UDP or TCP transport if you need an alternative.")
-        self.transport = combo([("UDP", "UDP"), ("TCP", "TCP")])
+        self.ui.set(self.protocol, "tooltip-text", "WireGuard is lightweight. OpenVPN offers UDP or TCP transport if you need an alternative.")
+        self.transport = combo([("UDP", "UDP"), ("TCP", "TCP")], self.ui)
         self.transport.set_active_id(self.preferences.data["transport"])
-        self.transport.set_tooltip_text("OpenVPN only. UDP favors speed; TCP may work better on restrictive networks.")
-        self.city = combo([("", "Automatic city")])
-        self.city.set_tooltip_text("Let CyberGhost choose a city, or select one. Server loads are reported by the CLI.")
-        self.server = ServerPicker()
+        self.ui.set(self.transport, "tooltip-text", "OpenVPN only. UDP favors speed; TCP may work better on restrictive networks.")
+        self.city = combo([("", "Automatic city")], self.ui)
+        self.ui.set(self.city, "tooltip-text", "Let CyberGhost choose a city, or select one. Server loads are reported by the CLI.")
+        self.server = ServerPicker(self.ui)
         self.server.append("", "Automatic server")
         self.server.set_active(0)
-        self.server.set_tooltip_text("Choose a city to list servers, lowest load first. Automatic lets CyberGhost select one. "
+        self.ui.set(self.server, "tooltip-text", "Choose a city to list servers, lowest load first. Automatic lets CyberGhost select one. "
                                      "Scroll the list or use the arrow keys and Enter to choose.")
         for column, title, widget in [(0, "PROTOCOL", self.protocol), (1, "OPENVPN TRANSPORT", self.transport)]:
             grid.attach(label(title, "eyebrow"), column, 0, 1, 1)
@@ -303,19 +330,18 @@ class MainWindow(Gtk.ApplicationWindow):
         self.location_hint = label("Select a country on the left. Nothing connects automatically.", "caption", wrap=True)
         settings.pack_start(self.location_hint, False, False, 0)
 
-        self.startup_expander = Gtk.Expander(label="Startup")
+        self.startup_expander = self.ui(Gtk.Expander(), label="Startup")
         startup_box = styled(box(spacing=10, margin=14), "settings-card")
-        self.startup_toggle = Gtk.CheckButton(label="Connect VPN during boot")
-        self.startup_toggle.set_tooltip_text(
-            "Authorize once to save this location for future boots. The VPN connects after networking becomes "
+        self.startup_toggle = self.ui(Gtk.CheckButton(), label="Connect VPN during boot")
+        self.ui.set(self.startup_toggle, "tooltip-text", "Authorize once to save this location for future boots. The VPN connects after networking becomes "
             "available, and this app opens when you sign in. The current connection stays unchanged.")
         self.startup_toggle.connect("toggled", self._startup_toggled)
         startup_box.pack_start(self.startup_toggle, False, False, 0)
-        self.startup_guard = Gtk.CheckButton(label="Enable VPN only after connecting (WireGuard)")
-        self.startup_guard.set_tooltip_text("Optional protection for the startup connection. Early boot traffic can use the normal network until the VPN connects.")
+        self.startup_guard = self.ui(Gtk.CheckButton(), label="Enable VPN only after connecting (WireGuard)")
+        self.ui.set(self.startup_guard, "tooltip-text", "Optional protection for the startup connection. Early boot traffic can use the normal network until the VPN connects.")
         startup_box.pack_start(self.startup_guard, False, False, 0)
-        self.startup_save = Gtk.Button(label="Save current location for startup")
-        self.startup_save.set_tooltip_text("Save the selected country/service, city, server and protocol. Changes require Linux authorization.")
+        self.startup_save = self.ui(Gtk.Button(), label="Save current location for startup")
+        self.ui.set(self.startup_save, "tooltip-text", "Save the selected country/service, city, server and protocol. Changes require Linux authorization.")
         self.startup_save.connect("clicked", lambda *_: self._change_startup(True))
         startup_box.pack_start(self.startup_save, False, False, 0)
         self.startup_detail = label("Checking startup settings…", "caption", wrap=True)
@@ -329,11 +355,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self.command_label = label("Choose a location to see the command.", "command", wrap=True)
         self.command_label.set_selectable(True)
         command_box.pack_start(self.command_label, False, False, 0)
-        self.copy_button = Gtk.Button(label="Copy command")
+        self.copy_button = self.ui(Gtk.Button(), label="Copy command")
         self.copy_button.set_halign(Gtk.Align.START)
         self.copy_button.connect("clicked", self._copy_command)
         command_box.pack_start(self.copy_button, False, False, 0)
-        command_expander = Gtk.Expander(label="Command preview")
+        command_expander = self.ui(Gtk.Expander(), label="Command preview")
+        self.command_expander = command_expander
         command_expander.add(command_box)
         content.pack_start(command_expander, False, False, 0)
 
@@ -345,10 +372,31 @@ class MainWindow(Gtk.ApplicationWindow):
         log_scroll.set_min_content_height(140)
         log_scroll.set_max_content_height(200)
         log_scroll.add(self.log)
-        self.log_expander = Gtk.Expander(label="Activity & CLI output")
+        self.log_expander = self.ui(Gtk.Expander(), label="Activity & CLI output")
         self.log_expander.add(log_scroll)
         content.pack_start(self.log_expander, False, False, 0)
         content.pack_start(label("Closing this window does not disconnect your VPN.", "caption", wrap=True), False, False, 0)
+
+    def _label(self, text, *classes, wrap=False):
+        return self.ui(label("", *classes, wrap=wrap), label=text)
+
+    def _language_changed(self, *_):
+        if self._translating:
+            return
+        code = self.language.get_active_id()
+        if not code or code == self.ui.translator.language:
+            return
+        self.ui.translator.set_language(code)
+        self.preferences.data["language"] = self.ui.translator.language
+        self._save()
+        self._translating = True
+        try:
+            self.ui.refresh()
+        finally:
+            self._translating = False
+        self.language.get_accessible().set_name(self.ui.translator.text("Language"))
+        self._sync_status_icon()
+        self.get_application().sync_tray()
 
     def _submit(self, key, work, on_success, on_error=None):
         if not self.alive:
@@ -378,21 +426,24 @@ class MainWindow(Gtk.ApplicationWindow):
         try:
             self.preferences.save()
         except OSError as error:
-            self._append_log(f"Could not save preferences: {error}")
+            self._append_log(msg("Could not save preferences: {error}", error=str(error)))
 
     def _append_log(self, text):
+        text = self.ui.translator.render(text)
         buffer = self.log.get_buffer()
         previous = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
         buffer.set_text((previous + f"[{datetime.now():%H:%M:%S}] {text}\n")[-40000:])
         self.log.scroll_to_iter(buffer.get_end_iter(), 0, False, 0, 1)
 
     def _show_error(self, error):
-        self.error_label.set_text(str(error))
+        self.ui.set(self.error_label, "label", str(error))
         self.error_box.show_all()
         details = getattr(error, "details", "")
         self._append_log(str(error) + ("\n" + details if details else ""))
 
     def _mode_changed(self, *_):
+        if self._translating:
+            return
         self.preferences.data["mode"] = self.mode.get_active_id()
         self._save()
         self.refresh_locations()
@@ -426,16 +477,16 @@ class MainWindow(Gtk.ApplicationWindow):
             previous.cancel()
         self.location = None
         self.locations = []
-        self.selected_title.set_text("Choose a location")
+        self.ui.set(self.selected_title, "label", "Choose a location")
         self._reset_choices()
         self._render_locations()
-        self.empty_list.set_text("Loading locations…")
-        self.location_count.set_text("Contacting CyberGhost…")
+        self.ui.set(self.empty_list, "label", "Loading locations…")
+        self.ui.set(self.location_count, "label", "Contacting CyberGhost…")
         self._sync_controls()
 
         if not self.client.binary:
-            self.empty_list.set_text("Open Setup to install the CyberGhost CLI.")
-            self.location_count.set_text("CLI setup required")
+            self.ui.set(self.empty_list, "label", "Open Setup to install the CyberGhost CLI.")
+            self.ui.set(self.location_count, "label", "CLI setup required")
             return
 
         deadline = None
@@ -445,8 +496,8 @@ class MainWindow(Gtk.ApplicationWindow):
             return self.alive and epoch == self._epoch
 
         def wait(message):
-            self.empty_list.set_text(message)
-            self.location_count.set_text("Waiting to load locations…")
+            self.ui.set(self.empty_list, "label", message)
+            self.ui.set(self.location_count, "label", "Waiting to load locations…")
             self._locations_retry = GLib.timeout_add_seconds(3, attempt)
 
         def loaded(locations):
@@ -456,7 +507,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self.preferences.remember_locations(mode, locations)
             self._save()
             self._render_locations()
-            self._append_log(f"Loaded {len(locations)} {mode} locations.")
+            self._append_log(msg("Loaded {count} {mode} locations.", count=len(locations), mode=mode))
 
         def use_offline_locations():
             cached = self.preferences.offline_locations(mode)
@@ -464,7 +515,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 return False
             self.locations = cached
             self._render_locations()
-            self.location_count.set_text(f"{len(cached)} saved locations · VPN only")
+            self.ui.set(self.location_count, "label", msg("{count} saved locations · VPN only", count=len(cached)))
             self._append_log("Using saved locations while VPN only blocks direct traffic. Connect, then Refresh for the latest list.")
             return True
 
@@ -481,8 +532,8 @@ class MainWindow(Gtk.ApplicationWindow):
                     self._append_log(message)
                     network_wait_logged = True
                 return
-            self.empty_list.set_text("Locations unavailable. Use Refresh to try again.")
-            self.location_count.set_text("Could not load locations")
+            self.ui.set(self.empty_list, "label", "Locations unavailable. Use Refresh to try again.")
+            self.ui.set(self.location_count, "label", "Could not load locations")
             self._show_error(error)
 
         def attempt():
@@ -503,8 +554,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 return False
             if deadline is None:
                 deadline = time.monotonic() + 180
-            self.empty_list.set_text("Loading locations…")
-            self.location_count.set_text("Contacting CyberGhost…")
+            self.ui.set(self.empty_list, "label", "Loading locations…")
+            self.ui.set(self.location_count, "label", "Contacting CyberGhost…")
             self._submit("locations", lambda: self.client.locations(mode), loaded, failed)
             return False
 
@@ -514,12 +565,12 @@ class MainWindow(Gtk.ApplicationWindow):
         return self.mode.get_active_id() + ":" + location.key
 
     def _render_locations(self):
-        if not hasattr(self, "location_list"):
+        if not self.alive or not hasattr(self, "location_list"):
             return
         self._rendering = True
         try:
             for child in self.location_list.get_children():
-                self.location_list.remove(child)
+                child.destroy()
             query = self.search.get_text().strip().casefold()
             favorites = self.preferences.data["favorites"]
             chosen = self.location.key if self.location else None
@@ -547,8 +598,8 @@ class MainWindow(Gtk.ApplicationWindow):
                 if location.key == chosen or (chosen is None and self._favorite_key(location) == saved):
                     selected_row = row
             count = len(self.location_list.get_children())
-            self.location_count.set_text(f"{count} of {len(self.locations)} locations")
-            self.empty_list.set_text("No matching locations." if self.locations else "No locations loaded.")
+            self.ui.set(self.location_count, "label", msg("{count} of {total} locations", count=count, total=len(self.locations)))
+            self.ui.set(self.empty_list, "label", "No matching locations." if self.locations else "No locations loaded.")
             self.location_list.show_all()
             if selected_row is not None:
                 self.location_list.select_row(selected_row)
@@ -564,13 +615,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self.location = row.location
         self.preferences.data["last_location"] = self._favorite_key(self.location)
         self._save()
-        self.selected_title.set_text(self.location.name)
-        self.selected_title.set_tooltip_text(self.location.name)
+        self.ui.set(self.selected_title, "label", self.location.name)
+        self.ui.set(self.selected_title, "tooltip-text", self.location.name)
         self._reset_choices()
         self._update_favorite()
         self._sync_controls()
         if self.mode.get_active_id() == "streaming":
-            self.location_hint.set_text("CyberGhost selects the server optimized for this streaming service.")
+            self.ui.set(self.location_hint, "label", "CyberGhost selects the server optimized for this streaming service.")
         else:
             self._load_cities()
 
@@ -578,7 +629,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._updating_favorite = True
         favorite = self.location is not None and self._favorite_key(self.location) in self.preferences.data["favorites"]
         self.favorite_button.set_active(favorite)
-        self.favorite_button.set_label("★" if favorite else "☆")
+        self.ui.set(self.favorite_button, "label", "★" if favorite else "☆")
         self._updating_favorite = False
 
     def _favorite_changed(self, *_):
@@ -616,31 +667,31 @@ class MainWindow(Gtk.ApplicationWindow):
         epoch = self._epoch
         selection = self._selection()
         key = (selection.mode, selection.country)
-        self.location_hint.set_text("Loading available cities…")
+        self.ui.set(self.location_hint, "label", "Loading available cities…")
 
         def loaded(choices):
             if epoch != self._epoch:
                 return
             self._cache[key] = choices
             for choice in choices:
-                self.city.append(choice.value, choice.label)
-            self.location_hint.set_text(f"{len(choices)} cities available. Automatic lets CyberGhost choose." if choices else "No city list returned; automatic selection is still available.")
+                self.city.append(choice.value, choice_label(choice))
+            self.ui.set(self.location_hint, "label", msg("{count} cities available. Automatic lets CyberGhost choose.", count=len(choices)) if choices else "No city list returned; automatic selection is still available.")
             self._sync_controls()
 
         def failed(error):
             if epoch == self._epoch:
-                self.location_hint.set_text("City list unavailable. You can still use automatic selection.")
+                self.ui.set(self.location_hint, "label", "City list unavailable. You can still use automatic selection.")
                 self._show_error(error)
 
         if key in self._cache:
             loaded(self._cache[key])
         elif self.guard_state.state == "on" and self.state.state == "disconnected":
-            self.location_hint.set_text("Use Automatic city to reconnect. City and server lists can refresh through the new VPN.")
+            self.ui.set(self.location_hint, "label", "Use Automatic city to reconnect. City and server lists can refresh through the new VPN.")
         else:
             self._submit("cities", lambda: self.client.cities(selection), loaded, failed)
 
     def _city_changed(self, *_):
-        if self._changing_choices:
+        if self._changing_choices or self._translating:
             return
         self._epoch += 1
         self._server_refresh_deferred = False
@@ -648,7 +699,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.server.replace([("", "Automatic server")])
         self._sync_controls()
         if not self.city.get_active_id():
-            self.location_hint.set_text("Automatic city and server selection.")
+            self.ui.set(self.location_hint, "label", "Automatic city and server selection.")
             return
         self._load_servers()
 
@@ -659,7 +710,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._server_refresh_deferred = False
 
         def show(choices):
-            self.server.replace([("", "Automatic server"), *((choice.value, choice.label) for choice in choices)])
+            self.server.replace([("", "Automatic server"), *((choice.value, choice_label(choice)) for choice in choices)])
             self._sync_controls()
 
         def loaded(choices):
@@ -668,14 +719,14 @@ class MainWindow(Gtk.ApplicationWindow):
             self._cache[key] = choices
             show(choices)
             self.server.set_status("" if choices else "No servers returned · use Automatic")
-            self.location_hint.set_text(f"{len(choices)} servers available in {selection.city}. Load is a snapshot, not a speed test.")
+            self.ui.set(self.location_hint, "label", msg("{count} servers available in {city}. Load is a snapshot, not a speed test.", count=len(choices), city=selection.city))
 
         def failed(error):
             if epoch != self._epoch:
                 return
             cached = bool(self._cache.get(key))
             self.server.set_status("Refresh failed · showing saved servers" if cached else "Server list unavailable · use Refresh")
-            self.location_hint.set_text("Server refresh failed. Saved entries are still available." if cached else
+            self.ui.set(self.location_hint, "label", "Server refresh failed. Saved entries are still available." if cached else
                                         "Server list unavailable. Automatic selection is still available.")
             self._show_error(error)
 
@@ -685,10 +736,10 @@ class MainWindow(Gtk.ApplicationWindow):
         if self.guard_state.state != "off" and self.state.state != "connected":
             self._server_refresh_deferred = True
             self.server.set_status("Saved servers · refresh after connecting" if cached else "Connect to load servers")
-            self.location_hint.set_text("City totals come from the location list. Individual servers will refresh once the VPN connects.")
+            self.ui.set(self.location_hint, "label", "City totals come from the location list. Individual servers will refresh once the VPN connects.")
             return
         self.server.set_status("Refreshing servers…" if cached else "Loading servers…", loading=True)
-        self.location_hint.set_text(("Refreshing servers for " if cached else "Loading servers for ") + selection.city + "…")
+        self.ui.set(self.location_hint, "label", msg("Refreshing servers for {city}…" if cached else "Loading servers for {city}…", city=selection.city))
         self._submit("servers", lambda: self.client.servers(selection), loaded, failed)
 
     def _refresh_deferred_servers(self):
@@ -697,6 +748,8 @@ class MainWindow(Gtk.ApplicationWindow):
             self._load_servers()
 
     def _protocol_changed(self, *_):
+        if self._translating:
+            return
         self.preferences.data.update(protocol=self.protocol.get_active_id(), transport=self.transport.get_active_id())
         self._save()
         self._sync_controls()
@@ -718,8 +771,7 @@ class MainWindow(Gtk.ApplicationWindow):
         switching = self.state.state == "connected" and self._selection_differs()
         self.connect_button.set_sensitive(not busy and available and ready and can_connect
                                           and self.location is not None and (self.state.state == "disconnected" or switching))
-        self.connect_button.set_tooltip_text(
-            "Refresh to verify VPN-only protection before reconnecting."
+        self.ui.set(self.connect_button, "tooltip-text", "Refresh to verify VPN-only protection before reconnecting."
             if self.guard_state.state == "unknown" else
             "Select WireGuard to reconnect with VPN-only protection enabled."
             if self.guard_state.state == "on" and self.protocol.get_active_id() != "wireguard" else
@@ -734,8 +786,8 @@ class MainWindow(Gtk.ApplicationWindow):
             if switching and can_connect:
                 message = "Connect will disconnect the current VPN and connect to the selected destination."
                 if self.guard_state.state == "on":
-                    message += " VPN only stays on."
-                self.operation_note.set_text(message)
+                    message = "Connect will disconnect the current VPN and connect to the selected destination. VPN only stays on."
+                self.ui.set(self.operation_note, "label", message)
             elif self.state.state == "disconnected" and self.guard_state.state != "off":
                 if self.guard_state.state == "unknown":
                     message = "VPN-only status could not be verified. Refresh before reconnecting."
@@ -743,11 +795,12 @@ class MainWindow(Gtk.ApplicationWindow):
                     message = "Select WireGuard to reconnect with VPN only enabled."
                 else:
                     message = "VPN only stays on. Connect to a new server while other traffic remains blocked."
-                self.operation_note.set_text(message)
+                self.ui.set(self.operation_note, "label", message)
             else:
-                self.operation_note.set_text("Authorization is handled by Linux. No password is stored here.")
+                self.ui.set(self.operation_note, "label", "Authorization is handled by Linux. No password is stored here.")
         self.disconnect_button.set_sensitive(not busy and available and self.state.state != "disconnected")
         self.setup_button.set_sensitive(not busy and not self.client.demo)
+        self.language.set_sensitive(not self.control_busy and not self._setup_running())
         self.mode.set_sensitive(not busy)
         self.location_list.set_sensitive(not busy)
         self.refresh_button.set_sensitive(not self.control_busy and not self._setup_running())
@@ -771,7 +824,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self.copy_button.set_sensitive(False)
         else:
             self.copy_button.set_sensitive(True)
-        self.command_label.set_text(command)
+        self.ui.set(self.command_label, "label", command)
         self._sync_status_icon()
         app = self.get_application()
         if hasattr(app, "sync_tray"):
@@ -786,7 +839,9 @@ class MainWindow(Gtk.ApplicationWindow):
             description = "Connecting…" if self._connection_action == "connect" else "Disconnecting…"
         elif self.startup_state.running:
             state, description = "unknown", "Starting VPN…"
-        description = ("Demo · " if self.client.demo else "") + "CyberGhost Desktop · " + description
+        description = self.ui.translator.text("CyberGhost Desktop · {status}", status=msg(description))
+        if self.client.demo:
+            description = self.ui.translator.text("Demo · {status}", status=description)
         return state, description
 
     def _sync_status_icon(self):
@@ -795,7 +850,7 @@ class MainWindow(Gtk.ApplicationWindow):
             path = Path(__file__).resolve().with_name("icons") / f"cyberghost-desktop-{state}.svg"
             self.status_icon.set_from_gicon(file_icon(path), Gtk.IconSize.DIALOG)
             self._status_icon_state = state
-        self.status_icon.set_tooltip_text(description)
+        self.ui.set(self.status_icon, "tooltip-text", description)
         self.status_icon.get_accessible().set_name(description)
 
     def _copy_command(self, *_):
@@ -842,21 +897,21 @@ class MainWindow(Gtk.ApplicationWindow):
         changed = status != self.state
         self.state = status
         titles = {"connected": "Connected", "disconnected": "Not connected", "unknown": "Status unavailable"}
-        self.status_title.set_text(("Demo · " if self.client.demo else "") + titles[status.state])
+        self.ui.set(self.status_title, "label", msg("Demo · {status}", status=msg(titles[status.state])) if self.client.demo else titles[status.state])
         if not self.client.binary:
-            self.status_title.set_text("Setup required")
-        self.status_chip.set_text("●  " + ("VPN ACTIVE" if status.state == "connected" else "VPN DISCONNECTED" if status.state == "disconnected" else "STATUS UNKNOWN"))
+            self.ui.set(self.status_title, "label", "Setup required")
+        self.ui.set(self.status_chip, "label", "●  VPN ACTIVE" if status.state == "connected" else "●  VPN DISCONNECTED" if status.state == "disconnected" else "●  STATUS UNKNOWN")
         context = self.status_chip.get_style_context()
         for name in ["connected", "disconnected"]:
             context.remove_class(name)
         context.add_class(status.state)
         if status.state == "connected":
-            message = status.detail + "\nChoose another destination, then Connect to switch."
+            message = msg("{detail}\nChoose another destination, then Connect to switch.", detail=msg(status.detail))
         elif status.state == "disconnected":
             message = "Choose a location, then connect when you’re ready."
         else:
             message = status.detail[:300]
-        self.status_detail.set_text(message)
+        self.ui.set(self.status_detail, "label", message)
         if changed:
             self._append_log(status.detail)
         self._refresh_deferred_servers()
@@ -868,8 +923,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self._ip_pending = False
         self._ip_state = None
         self.current_ip = None
-        self.current_ip_label.set_text("Waiting for connection…")
-        self.current_ip_label.set_tooltip_text(None)
+        self.ui.set(self.current_ip_label, "label", "Waiting for connection…")
+        self.ui.set(self.current_ip_label, "tooltip-text", None)
 
     def _refresh_public_ip(self):
         state = self.state.state
@@ -879,38 +934,38 @@ class MainWindow(Gtk.ApplicationWindow):
             if self._ip_state is not None or self._ip_pending:
                 self._invalidate_public_ip()
             if state == "unknown":
-                self.current_ip_label.set_text("Waiting for status…")
+                self.ui.set(self.current_ip_label, "label", "Waiting for status…")
             return
         if state == "disconnected" and self.guard_state.state != "off":
             self._invalidate_public_ip()
-            self.current_ip_label.set_text("Blocked by VPN only" if self.guard_state.state == "on" else "Waiting for firewall…")
+            self.ui.set(self.current_ip_label, "label", "Blocked by VPN only" if self.guard_state.state == "on" else "Waiting for firewall…")
             return
         if self._ip_state == state:
             return
         self._ip_state = state
         self._ip_pending = True
-        self.current_ip_label.set_text("Checking…")
+        self.ui.set(self.current_ip_label, "label", "Checking…")
         if state == "connected" and self.before_ip is None:
-            self.before_ip_label.set_text("No baseline recorded")
+            self.ui.set(self.before_ip_label, "label", "No baseline recorded")
 
         def loaded(value):
             self._ip_pending = False
             if self.control_busy or self.state.state != state:
                 return
             self.current_ip = value
-            self.current_ip_label.set_text(value.display)
-            self.current_ip_label.set_tooltip_text(value.display)
+            self.ui.set(self.current_ip_label, "label", value.display)
+            self.ui.set(self.current_ip_label, "tooltip-text", value.display)
             if state == "disconnected":
                 self.before_ip = value
-                self.before_ip_label.set_text(value.display)
-                self.before_ip_label.set_tooltip_text(value.display)
+                self.ui.set(self.before_ip_label, "label", value.display)
+                self.ui.set(self.before_ip_label, "tooltip-text", value.display)
 
         def failed(_error):
             self._ip_pending = False
             if not self.control_busy and self.state.state == state:
                 self.current_ip = None
-                self.current_ip_label.set_text("Unavailable · refresh to retry")
-                self.current_ip_label.set_tooltip_text(None)
+                self.ui.set(self.current_ip_label, "label", "Unavailable · refresh to retry")
+                self.ui.set(self.current_ip_label, "tooltip-text", None)
 
         if self.client.demo:
             loaded(PublicIP("198.51.100.24", "DE") if state == "connected" else PublicIP("203.0.113.42"))
@@ -943,7 +998,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self.guard_toggle.set_inconsistent(status.state == "unknown")
         finally:
             self._setting_guard = False
-        self.guard_label.set_text(status.detail)
+        self.ui.set(self.guard_label, "label", status.detail)
         self._refresh_deferred_servers()
         self._sync_controls()
         self._refresh_public_ip()
@@ -965,14 +1020,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self.spinner.show()
         self.spinner.start()
         self.error_box.hide()
-        self.operation_note.set_text("Authorize the firewall change in the Linux dialog…")
+        self.ui.set(self.operation_note, "label", "Authorize the firewall change in the Linux dialog…")
         self._sync_controls()
 
         def finish(status=None):
             self.control_busy = False
             self.spinner.stop()
             self.spinner.hide()
-            self.operation_note.set_text("Authorization is handled by Linux. No password is stored here.")
+            self.ui.set(self.operation_note, "label", "Authorization is handled by Linux. No password is stored here.")
             if status is not None:
                 self._apply_guard(status)
                 self._append_log(status.detail)
@@ -1002,7 +1057,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._startup_pending = False
             # Unverified boot state must not invite a second concurrent connect.
             self._startup_ready = False
-            self.startup_detail.set_text(str(error))
+            self.ui.set(self.startup_detail, "label", str(error))
             self._sync_controls()
             self.refresh_button.set_sensitive(not self.control_busy)
 
@@ -1019,7 +1074,7 @@ class MainWindow(Gtk.ApplicationWindow):
                 self.startup_guard.set_active(state.vpn_only)
         finally:
             self._setting_startup = False
-        self.startup_detail.set_text(state.detail)
+        self.ui.set(self.startup_detail, "label", state.detail_message or state.detail)
         self._sync_controls()
 
     def _startup_toggled(self, *_):
@@ -1047,13 +1102,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self.spinner.show()
         self.spinner.start()
         self.error_box.hide()
-        self.operation_note.set_text("Authorize the startup settings in the Linux dialog…")
+        self.ui.set(self.operation_note, "label", "Authorize the startup settings in the Linux dialog…")
 
         def finish(state=None):
             self.control_busy = False
             self.spinner.stop()
             self.spinner.hide()
-            self.operation_note.set_text("Authorization is handled by Linux. No password is stored here.")
+            self.ui.set(self.operation_note, "label", "Authorization is handled by Linux. No password is stored here.")
             if state is not None:
                 self._apply_startup(state, reset_form=True)
                 self._append_log("Startup connection saved for the next boot." if state.enabled else "Startup connection disabled. Current VPN unchanged.")
@@ -1098,11 +1153,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self.error_box.hide()
         self.spinner.show()
         self.spinner.start()
-        self.status_title.set_text("Switching server…" if replacing else "Connecting…" if action == "connect" else "Disconnecting…")
+        self.ui.set(self.status_title, "label", "Switching server…" if replacing else "Connecting…" if action == "connect" else "Disconnecting…")
         self._connection_action = action
         self._requests["guard-status"] = self._requests.get("guard-status", 0) + 1
         self._guard_pending = False
-        self.operation_note.set_text("Authorize the new VPN connection. Other traffic stays blocked…" if protected and action == "connect"
+        self.ui.set(self.operation_note, "label", "Authorize the new VPN connection. Other traffic stays blocked…" if protected and action == "connect"
                                      else "Complete the Linux authorization dialog. Waiting for CyberGhost…")
         self._sync_controls()
         self._append_log(("Disconnect current VPN, then " if replacing else "") + selection.command_preview() if action == "connect" else "cyberghostvpn --stop")
@@ -1112,7 +1167,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._connection_action = None
             self.spinner.stop()
             self.spinner.hide()
-            self.operation_note.set_text("Authorization is handled by Linux. No password is stored here.")
+            self.ui.set(self.operation_note, "label", "Authorization is handled by Linux. No password is stored here.")
             self._apply_status(Status("unknown", "Checking the result with CyberGhost…"))
             self.refresh_guard()
             self.refresh_status()
@@ -1161,9 +1216,9 @@ class MainWindow(Gtk.ApplicationWindow):
             self.refresh()
 
     def _about(self, *_):
-        dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.INFO,
-                                   buttons=Gtk.ButtonsType.CLOSE, text=f"CyberGhost Desktop · {__version__}")
-        dialog.format_secondary_text(
+        dialog = self.ui(Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.INFO, buttons=Gtk.ButtonsType.NONE), text=f"CyberGhost Desktop · {__version__}")
+        dialog.add_button(self.ui.translator.text("Close"), Gtk.ResponseType.CLOSE)
+        self.ui.set(dialog, "secondary-text",
             "An independent, unofficial interface for the installed CyberGhost Linux CLI.\n\n"
             "Use Setup in the header to install the CLI or configure your account.\n\n"
             "Ctrl+F: search locations   ·   F5: refresh   ·   Ctrl+Q: quit\n\n"
@@ -1201,6 +1256,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _destroy(self, *_):
         self.alive = False
+        self.location_list.set_placeholder(None)
+        self.empty_list.destroy()
         if self._locations_retry is not None:
             GLib.source_remove(self._locations_retry)
             self._locations_retry = None
@@ -1219,6 +1276,8 @@ class Application(Gtk.Application):
                          flags=Gio.ApplicationFlags.FLAGS_NONE)
         self.client = client or (DemoClient() if demo else CyberGhostClient())
         self.preferences = preferences or Preferences(persistent=not demo)
+        self.translator = Translator(self.preferences.data["language"])
+        self.ui = UIStrings(self.translator)
         self.want_tray = tray
         self.setup_on_start = setup
         self.ip_lookup = ip_lookup or fetch_public_ip
@@ -1249,17 +1308,17 @@ class Application(Gtk.Application):
             except (ValueError, ImportError):
                 continue
             menu = Gtk.Menu()
-            self.tray_status = Gtk.MenuItem(label="CyberGhost Desktop")
+            self.tray_status = self.ui(Gtk.MenuItem(), label="CyberGhost Desktop")
             self.tray_status.set_sensitive(False)
             menu.append(self.tray_status)
-            show = Gtk.MenuItem(label="Open CyberGhost Desktop")
+            show = self.ui(Gtk.MenuItem(), label="Open CyberGhost Desktop")
             show.connect("activate", lambda *_: self.activate())
             menu.append(show)
-            self.tray_disconnect = Gtk.MenuItem(label="Disconnect VPN")
+            self.tray_disconnect = self.ui(Gtk.MenuItem(), label="Disconnect VPN")
             self.tray_disconnect.connect("activate", lambda *_: self.window._control("disconnect"))
             menu.append(self.tray_disconnect)
             menu.append(Gtk.SeparatorMenuItem())
-            quit_item = Gtk.MenuItem(label="Quit (keep VPN connection)")
+            quit_item = self.ui(Gtk.MenuItem(), label="Quit (keep VPN connection)")
             quit_item.connect("activate", lambda *_: self.request_quit())
             menu.append(quit_item)
             menu.show_all()
@@ -1282,7 +1341,7 @@ class Application(Gtk.Application):
                 self.tray.set_icon_full("cyberghost-desktop-" + state, description)
                 self.tray.set_title(description)
                 self._tray_appearance = appearance
-            self.tray_status.set_label(description)
+            self.ui.set(self.tray_status, "label", description)
             self.tray_disconnect.set_sensitive(self.window.disconnect_button.get_sensitive())
 
     def request_quit(self):

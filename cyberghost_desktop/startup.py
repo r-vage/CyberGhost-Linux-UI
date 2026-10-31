@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 
 from .cli import CliError, Selection
+from .i18n import Message, message as msg
 from .linux_support import systemd_available
 from .startup_system import MARKER, Paths, SYSTEM_PATH, read_profile
 
@@ -23,6 +24,7 @@ class StartupState:
     running: bool = False
     detail: str = "Off · choose a location, then enable connection during boot."
     available: bool = True
+    detail_message: Message | None = None
 
 
 def desktop_arg(value):
@@ -113,23 +115,30 @@ class StartupManager:
         if selection.server:
             target += " · " + selection.server
         detail = "Saved: " + target + ". Starts on the next boot."
+        display = msg("Saved: {target}. Starts on the next boot.", target=target)
         if fields.get("UnitFileState") != "enabled":
             detail = "Boot service is not enabled. Save the startup settings again."
+            display = msg(detail)
         elif not self.autostart.path.exists():
             detail = "Boot VPN is enabled, but desktop startup is missing. Save settings to restore it."
+            display = msg(detail)
         status_file = self.paths.runtime / "status.json"
         if status_file.is_file() and status_file.stat().st_size < 16384:
             try:
                 status = json.loads(status_file.read_text())
                 if isinstance(status.get("detail"), str):
                     detail = ("" if running else "Last boot: ") + status["detail"][:400] + "\nSaved: " + target
+                    display = msg("{detail}\nSaved: {target}" if running else "Last boot: {detail}\nSaved: {target}",
+                                  detail=msg(status["detail"][:400]), target=target)
             except (ValueError, OSError):
                 pass
         elif running:
             detail = "The boot VPN service is starting…\nSaved: " + target
+            display = msg("The boot VPN service is starting…\nSaved: {target}", target=target)
         elif fields.get("ActiveState") == "failed":
             detail = "The boot VPN service failed. Connect manually and check its system journal.\nSaved: " + target
-        return StartupState(True, selection, bool(profile["vpn_only"]), running, detail)
+            display = msg("The boot VPN service failed. Connect manually and check its system journal.\nSaved: {target}", target=target)
+        return StartupState(True, selection, bool(profile["vpn_only"]), running, detail, detail_message=display)
 
     def _authorize(self, action, payload=None):
         pkexec = shutil.which("pkexec", path=SYSTEM_PATH)
@@ -185,7 +194,8 @@ class DemoStartup:
 
     def configure(self, selection, vpn_only):
         selection.connect_args()
-        self.state = StartupState(True, selection, vpn_only, False, "Demo · saved startup location: " + selection.country)
+        self.state = StartupState(True, selection, vpn_only, False, "Demo · saved startup location: " + selection.country,
+                                  detail_message=msg("Demo · saved startup location: {country}", country=selection.country))
         return self.state
 
     def disable(self):

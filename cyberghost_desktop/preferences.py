@@ -14,11 +14,13 @@ class Preferences:
     def __init__(self, path: Path | None = None, *, persistent: bool = True):
         self.path = path or Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "cyberghost-desktop" / "preferences.json"
         self.persistent = persistent
-        self.data = {"mode": "traffic", "protocol": "wireguard", "transport": "UDP", "favorites": [], "last_location": "", "location_catalogues": {}}
+        self.data = {"mode": "traffic", "protocol": "wireguard", "transport": "UDP", "favorites": [], "last_location": "", "location_catalogues": {}, "language": "en"}
         if persistent:
             try:
                 stored = json.loads(self.path.read_text())
                 if isinstance(stored, dict):
+                    if isinstance(stored.get("language"), str) and re.fullmatch(r"[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", stored["language"]):
+                        self.data["language"] = stored["language"]
                     if stored.get("mode") in {"traffic", "torrent", "streaming"}:
                         self.data["mode"] = stored["mode"]
                     if stored.get("protocol") in {"wireguard", "openvpn"}:

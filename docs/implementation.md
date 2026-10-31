@@ -51,10 +51,35 @@ quitting during a connection action so it does not kill a privileged command
 halfway through network setup. Polkit handles cancellation of authorization.
 Catalog reads can finish for up to 40 seconds after exit; queued reads are cancelled.
 
-Preferences contain only mode/protocol/transport, last location and favorites.
+Preferences contain the interface language, mode/protocol/transport, last location,
+favorites and cached location catalogs.
 They use an atomic private file under the user's config directory. Runtime CLI
 output is not persisted. The separate demo client neither invokes subprocesses
 nor reads/writes real preferences.
+
+## Interface languages
+
+The header selector loads 15 interface languages from packaged UTF-8 JSON catalogs
+in `cyberghost_desktop/locales`. Additional catalogs are
+discovered at launch without a language registry in Python. The loader checks
+metadata and named format placeholders, ignores invalid entries and uses English
+for missing translations. An unavailable saved language also falls back to English.
+
+`UIStrings` retains the source message for each display property and updates those
+properties in place. Combo rows keep their original CLI IDs. A language change
+does not rebuild the window, refresh the catalogs, issue VPN commands or reset
+connection/protection state. The saved language uses the existing atomic
+preferences file; demo preferences remain in memory. Raw CLI/system diagnostics
+and remote location identifiers are preserved. Privileged helpers do not load
+translation files.
+
+`tools/check_translations.py` validates catalog structure, duplicates, source keys,
+placeholder compatibility and coverage. `tests/test_i18n.py` checks discovery,
+fallback, malformed input, nested messages and preferences. `tests/gui_i18n.py`
+uses demo backends to check live GTK updates, Setup, selected-server preservation,
+unchanged commands and addresses, saved-language restoration and binding cleanup.
+It switches through every discovered catalog, including right-to-left text.
+See the [translation contributor guide](TRANSLATING.md).
 
 ## Public IP and layout
 

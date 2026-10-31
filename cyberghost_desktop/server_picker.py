@@ -9,15 +9,18 @@ from gi.repository import GObject, Gtk, Pango  # noqa: E402
 class ServerPicker(Gtk.Box):
     __gsignals__ = {"changed": (GObject.SignalFlags.RUN_FIRST, None, ())}
 
-    def __init__(self):
+    def __init__(self, ui):
         super().__init__()
+        self.ui = ui
+        self.sources = {}
+        ui.watch(self, self.retranslate)
         self.button = Gtk.MenuButton()
         self.button.get_style_context().add_class("server-picker")
         self.pack_start(self.button, True, True, 0)
         self.set_hexpand(True)
         self._model = Gtk.ListStore(str, str)  # Display text, CLI value.
         self._active_id = None
-        self._label = Gtk.Label(label="Automatic server", xalign=0)
+        self._label = self.ui(Gtk.Label(xalign=0), label="Automatic server")
         self._label.set_ellipsize(Pango.EllipsizeMode.END)
         self._label.set_max_width_chars(24)
         contents = Gtk.Box(spacing=8)
@@ -26,6 +29,7 @@ class ServerPicker(Gtk.Box):
         self.button.add(contents)
 
         self.popover = Gtk.Popover(relative_to=self.button)
+        self.connect("destroy", lambda *_: self.popover.destroy())
         self.popover.get_style_context().add_class("server-menu")
         self.popover.set_constrain_to(Gtk.PopoverConstraint.WINDOW)
         self.scroll = Gtk.ScrolledWindow()
@@ -65,11 +69,17 @@ class ServerPicker(Gtk.Box):
         self.button.set_popover(self.popover)
 
     def append(self, key, text):
-        self._model.append([text, key])
+        self.sources[key] = text
+        self._model.append([self.ui.translator.render(text), key])
+
+    def retranslate(self):
+        for row in self._model:
+            row[0] = self.ui.translator.render(self.sources[row[1]])
+        self.ui.set(self._label, "label", self.sources.get(self._active_id, "Automatic server"))
 
     def set_status(self, text="", *, loading=False):
-        self.status_label.set_text(text)
-        self.status_label.set_tooltip_text(text or None)
+        self.ui.set(self.status_label, "label", text)
+        self.ui.set(self.status_label, "tooltip-text", text or None)
         self.status_box.set_visible(bool(text))
         self.status_spinner.set_visible(loading)
         if loading:
@@ -80,6 +90,7 @@ class ServerPicker(Gtk.Box):
     def replace(self, choices):
         """Refresh rows without resetting a still-valid user selection."""
         previous = self._active_id
+        self.sources.clear()
         self._model.clear()
         for key, text in choices:
             self.append(key, text)
@@ -89,8 +100,9 @@ class ServerPicker(Gtk.Box):
     def remove_all(self):
         previous = self._active_id
         self._active_id = None
+        self.sources.clear()
         self._model.clear()
-        self._label.set_text("Automatic server")
+        self.ui.set(self._label, "label", "Automatic server")
         if previous is not None:
             self.emit("changed")
 
@@ -111,12 +123,12 @@ class ServerPicker(Gtk.Box):
         # Selection is separate from the menu button's open/closed state.
         if 0 <= index < len(self._model):
             row = self._model[index]
-            key, text = row[1], row[0]
+            key, text = row[1], self.sources[row[1]]
         else:
             key, text = None, "Automatic server"
         changed = key != self._active_id
         self._active_id = key
-        self._label.set_text(text)
+        self.ui.set(self._label, "label", text)
         if changed:
             self.emit("changed")
 

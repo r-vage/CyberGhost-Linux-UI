@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 from cyberghost_desktop.app import Application  # noqa: E402
 from cyberghost_desktop.authorization import AuthorizationStatus  # noqa: E402
 from cyberghost_desktop.cli import Choice, DemoClient  # noqa: E402
+from cyberghost_desktop.i18n import Translator  # noqa: E402
+from cyberghost_desktop.preferences import Preferences  # noqa: E402
 from cyberghost_desktop.setup_dialog import SetupDialog  # noqa: E402
 from cyberghost_desktop.setup_tasks import Installation  # noqa: E402
 
@@ -245,11 +247,22 @@ def external_action(*_args, **_kwargs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "docs", help="Screenshot directory (default: docs)")
-    output = parser.parse_args().output.resolve()
+    parser.add_argument("--language", choices=tuple(Translator().catalogs), default="en", help="Interface language")
+    parser.add_argument("--readme-only", action="store_true", help="Capture the three README images without the annotated English tour")
+    options = parser.parse_args()
+    output = options.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     gallery = output / "tour"
-    gallery.mkdir(exist_ok=True)
-    app = Application(demo=True, tray=False, client=TourClient())
+    if not options.readme_only:
+        gallery.mkdir(exist_ok=True)
+
+    def render_tour(*args, **kwargs):
+        if not options.readme_only:
+            tour(*args, **kwargs)
+
+    preferences = Preferences(persistent=False)
+    preferences.data["language"] = options.language
+    app = Application(demo=True, tray=False, client=TourClient(), preferences=preferences)
     app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
     assert app.register(None)
     try:
@@ -266,7 +279,7 @@ def main():
         until(lambda: len(window.server.get_model()) == 17)
         window.server.button.clicked()
         until(lambda: window.server.popover.get_mapped())
-        tour(window, gallery / "locations.png", 1, "Choose a location and a server",
+        render_tour(window, gallery / "locations.png", 1, "Choose a location and a server",
              "Country flags, saved favorites and a scrolling server list keep destination choices together.", [
                  ("left", 230, "Find a location", "Search by country or code. All locations, Streaming and P2P share the same sidebar.",
                   [window.mode, window.search]),
@@ -286,7 +299,7 @@ def main():
         capture(window, output / "desktop.png")
         window.server.set_active_id("frankfurt-demo-02")
         assert window.connect_button.get_sensitive(), "Changed destination should offer Connect"
-        tour(window, gallery / "connection.png", 2, "Check the connection and protect other traffic",
+        render_tour(window, gallery / "connection.png", 2, "Check the connection and protect other traffic",
              "The connection panel and tray share the same green, red and amber status icons.", [
                  ("left", 250, "Read the state", "Green arrow: connected. Red cross: disconnected. Amber question mark: changing or unknown status.",
                   [window.status_chip, window.status_icon, window.status_title]),
@@ -303,7 +316,7 @@ def main():
         window.startup_toggle.set_active(True)
         until(lambda: window.startup_state.enabled and not window.control_busy)
         capture(window, output / "startup.png")
-        tour(window, gallery / "startup.png", 3, "Save a connection for the next boot",
+        render_tour(window, gallery / "startup.png", 3, "Save a connection for the next boot",
              "Startup is optional and uses a saved destination, separate from the current connection.", [
                  ("left", 380, "Choose what to save", "Select the country, city, server and protocol to use at startup. The current VPN keeps running.",
                   [window.city, window.server]),
@@ -316,14 +329,13 @@ def main():
              ])
         window.startup_expander.set_expanded(False)
         window.resize(1080, 1160)
-        command_expander = next(widget for widget in window.startup_expander.get_parent().get_children()
-                                if isinstance(widget, Gtk.Expander) and widget.get_label() == "Command preview")
+        command_expander = window.command_expander
         command_expander.set_expanded(True)
         window.log_expander.set_expanded(True)
         paint(window)
         adjustment = window.content_scroll.get_vadjustment()
         adjustment.set_value(adjustment.get_upper() - adjustment.get_page_size())
-        tour(window, gallery / "activity.png", 4, "Inspect the command and its result",
+        render_tour(window, gallery / "activity.png", 4, "Inspect the command and its result",
              "The app keeps the requested command and the CLI's response available for troubleshooting.", [
                  ("left", 800, "Preview before running", "Command preview reflects the current selection. Copy command gives you the corresponding terminal command.",
                   [window.command_label, window.copy_button]),
@@ -343,7 +355,7 @@ def main():
             dialog.resize(740, 1240)
             dialog.present()
             capture(dialog, output / "setup.png")
-            tour(dialog, gallery / "setup.png", 5, "Install the CLI and manage authorization",
+            render_tour(dialog, gallery / "setup.png", 5, "Install the CLI and manage authorization",
                  "Setup guides the official installer and account configuration through the terminal.", [
                      ("left", 280, "Check this computer", "See whether the CLI, account configuration and connection authorization are available. Recheck after installing.",
                       [dialog.cli_status, dialog.account_status, dialog.check_button]),
@@ -356,7 +368,8 @@ def main():
                  ])
             dialog.destroy()
             window.setup_dialog = None
-        print("Captured three README screenshots and five annotated tour screens using demo data only.", flush=True)
+        print("Captured three README screenshots" + ("." if options.readme_only else " and five annotated tour screens.") +
+              " Demo data only; language: " + options.language, flush=True)
     finally:
         if app.window and app.window.alive:
             app.window.destroy()

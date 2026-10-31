@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 — 2026-10-31
+
+- Add a language selector with 15 complete catalogs: Arabic, English, French, German, Hebrew, Italian, Japanese, Korean, Persian, Brazilian Portuguese, Russian, Spanish, Turkish, Simplified Chinese and Traditional Chinese. Translate controls, setup, tooltips and app status text immediately while preserving VPN state, server selections and command arguments. Save the choice outside demo mode.
+- Load editable JSON translation catalogs automatically, with English fallback for missing or invalid entries. Include a contributor guide and a checker for JSON, placeholders and coverage.
+- Add German and Simplified Chinese READMEs with localized GTK screenshots. Refresh the English screenshots and extend the capture tool with language selection.
+- Check language persistence, fallback, live GTK updates and widget cleanup alongside the existing VPN UI tests.
+
 ## 0.1.2 — 2026-10-30
 
 - Refresh the desktop, startup and setup screenshots with country flags, shared status icons and current controls. Add a five-part visual tour with numbered callouts for locations, connection protection, startup, activity and CLI setup, linked from the README.

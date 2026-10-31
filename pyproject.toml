@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "CyberGhost-Linux-UI"
-version = "0.1.2"
+version = "0.1.3"
 description = "An independent Linux desktop interface for the CyberGhost VPN CLI."
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -22,7 +22,7 @@ cyberghost-desktop = "cyberghost_desktop.__main__:main"
 include = ["cyberghost_desktop*"]
 
 [tool.setuptools.package-data]
-cyberghost_desktop = ["style.css", "icons/*.svg", "assets/flags/*.svg", "assets/flags/LICENSE", "assets/flags/SOURCE.txt"]
+cyberghost_desktop = ["style.css", "icons/*.svg", "assets/flags/*.svg", "assets/flags/LICENSE", "assets/flags/SOURCE.txt", "locales/*.json"]
 
 [tool.ruff]
 target-version = "py310"
