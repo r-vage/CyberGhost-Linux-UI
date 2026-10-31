@@ -28,6 +28,7 @@ locations, connection controls, startup and setup.
   connections or when status is unknown.
 - Preview the exact command or try the interface with `--demo`.
 - Install and configure the official CLI through a guided Setup screen.
+- See the current app version, check for updates, install them and restart from About.
 - Switch between 15 interface languages from the language selector
   in the window header, with editable translation files for additional languages.
 
@@ -187,12 +188,18 @@ Each language appears under its native name. The interface updates immediately
 and remembers your choice. Switching languages preserves the selected location,
 protocol, server and VPN connection. Demo mode keeps the language choice in memory only.
 
-Translations are plain UTF-8 JSON files in
-[`cyberghost_desktop/locales`](cyberghost_desktop/locales). To contribute another
-language, copy `en.json`, change its language code and native name, translate the
-message values, and submit the new file in a pull request. New files are discovered
-when the app starts; missing translations fall back to English. See the
-[translation guide](docs/TRANSLATING.md) for the format, validation and preview steps.
+Personal translations are editable UTF-8 JSON files in
+`~/.config/cyberghost-desktop/locales` (or under `$XDG_CONFIG_HOME`). The app creates
+these copies at startup. Updates add new messages and improve untouched translations
+while preserving your edits. If both you and an update change a message, your text
+wins; backups and the latest default are kept for comparison.
+
+New language files in that folder appear in the selector after restarting the app.
+To contribute a language, copy `en.json`, change its language code and native name,
+and translate the message values. Add the file to
+[`cyberghost_desktop/locales`](cyberghost_desktop/locales), regenerate the language
+manifest and submit both in a pull request. See the [translation guide](docs/TRANSLATING.md)
+for merging rules, validation and preview steps. Missing translations use English.
 
 Country, city, service and server names supplied by the CLI remain unchanged.
 Raw CLI/system diagnostics remain in their original language. The official
@@ -201,10 +208,26 @@ use their own language settings.
 
 ## Update, move or uninstall
 
+The window header shows the current app version. Open **ⓘ → About and updates**
+and select **Check for updates** to compare it with the version published on
+GitHub. When an update is available, choose **Install update**, then **Restart app**.
+Installation runs while the app stays open; your VPN connection and VPN-only
+protection remain active. VPN controls are paused until you restart to load the
+new code. Checks and installation run only when requested and are disabled in demo mode.
+
+In-app installation requires Git and the official repository's `main` branch. It
+performs a fast-forward update, equivalent to `git pull --ff-only`. Personal
+translations stay outside the checkout. Unstaged edits to valid bundled language
+files are backed up and copied into your personal translations before updating.
+Other local changes, staged files or local commits require a manual update.
+
+![About and updates with simulated version data](docs/updates.png)
+
 The launcher points to this checkout, so keep the folder in place. For a Git
-checkout, update with `git pull`, then rerun `/usr/bin/python3 install.py`. For a
+checkout, you can also update manually with `git pull --ff-only`, then rerun
+`/usr/bin/python3 install.py`. For a
 ZIP installation, replace the project files with the new release and rerun the
-installer. Reopen the app to load updated code.
+installer. Reopen the app to load updated code. **Update instructions** opens this section.
 If boot connection is enabled, use **Startup → Save current location for startup**
 after updating to refresh its protected helper copies as well.
 
@@ -387,6 +410,8 @@ to regenerate them with demo data and no active VPN.
 /usr/bin/python3 tests/gui_startup_wait.py
 /usr/bin/python3 tests/gui_server_loading.py
 /usr/bin/python3 tests/gui_i18n.py
+/usr/bin/python3 tests/gui_locale_store.py
+/usr/bin/python3 tests/gui_updates.py
 # Kernel checks in disposable user/network namespaces; never the host firewall:
 /usr/bin/python3 tests/firewall_namespace.py
 ```

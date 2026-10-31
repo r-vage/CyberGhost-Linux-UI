@@ -27,6 +27,7 @@ mit Demodaten und verändern keine VPN-Verbindung.
 - Über das optionale Taskleistensymbol das Fenster öffnen oder die Verbindung trennen. Ein grüner Pfeil bedeutet „verbunden“, ein rotes Kreuz „getrennt“ und ein gelbes Fragezeichen einen laufenden Verbindungswechsel oder unbekannten Status.
 - Den genauen Befehl vorab ansehen oder die Oberfläche mit `--demo` ausprobieren.
 - Die offizielle CLI über eine geführte Einrichtung installieren und konfigurieren.
+- Die aktuelle App-Version anzeigen, nach Updates suchen, sie installieren und die App neu starten.
 - Direkt zwischen 15 Oberflächensprachen wechseln. Weitere Sprachen lassen sich über bearbeitbare Übersetzungsdateien ergänzen.
 
 Beim Öffnen der App, Auswählen eines Standorts, Wiederherstellen von Einstellungen
@@ -183,13 +184,20 @@ Oberfläche wechselt sofort und merkt sich deine Auswahl. Standort, Protokoll,
 Server und VPN-Verbindung bleiben erhalten. Im Demomodus wird die Sprachauswahl
 nur im Arbeitsspeicher gehalten.
 
-Die Übersetzungen liegen als bearbeitbare UTF-8-JSON-Dateien in
-[`cyberghost_desktop/locales`](cyberghost_desktop/locales). Für eine weitere
-Sprache kopierst du `en.json`, änderst Sprachcode und Eigenname der Sprache und
-übersetzt die Nachrichtenwerte. Reiche die neue Datei anschließend per Pull
-Request ein. Neue Dateien werden beim App-Start erkannt; fehlende Übersetzungen
-erscheinen auf Englisch. Die [Übersetzungsanleitung](docs/TRANSLATING.md) erklärt
-Format, Platzhalter, Prüfungen und Vorschau auf Englisch.
+Persönliche Übersetzungen liegen als bearbeitbare UTF-8-JSON-Dateien in
+`~/.config/cyberghost-desktop/locales` beziehungsweise unter `$XDG_CONFIG_HOME`.
+Die App erstellt diese Kopien beim Start. Updates ergänzen neue Nachrichten und
+verbessern unveränderte Übersetzungen; deine Anpassungen bleiben erhalten. Ändern
+beide Seiten dieselbe Nachricht, bleibt dein Text bestehen. Sicherungskopien und
+die aktuelle Standardübersetzung werden zum Vergleichen aufbewahrt.
+
+Neue Sprachdateien in diesem Ordner erscheinen nach einem Neustart im Auswahlmenü.
+Für eine weitere Sprache kopierst du `en.json`, änderst Sprachcode und Eigenname
+und übersetzt die Nachrichtenwerte. Für einen Pull Request legst du die Datei in
+[`cyberghost_desktop/locales`](cyberghost_desktop/locales) ab und erzeugst das
+Sprachmanifest neu. Reiche beide Dateien ein. Fehlende Übersetzungen erscheinen
+auf Englisch. Die [Übersetzungsanleitung](docs/TRANSLATING.md) erklärt auf Englisch,
+wie Anpassungen zusammengeführt, geprüft und in der Vorschau angezeigt werden.
 
 Länder-, Städte-, Dienst- und Servernamen der CLI bleiben unverändert.
 Unverarbeitete CLI- und Systemdiagnosen behalten ihre ursprüngliche Sprache.
@@ -198,11 +206,29 @@ GTK-Dateiauswahl-Steuerelemente verwenden ihre eigenen Spracheinstellungen.
 
 ## Aktualisieren, verschieben oder deinstallieren
 
+Die aktuelle App-Version steht in der Fensterkopfzeile. Öffne **ⓘ → Über die App
+und Updates** und wähle **Nach Updates suchen**, um sie mit der auf GitHub
+veröffentlichten Version zu vergleichen. Ist ein Update verfügbar, wähle
+**Update installieren** und anschließend **App neu starten**. Die Installation läuft
+bei geöffneter App; VPN-Verbindung und Nur-VPN-Schutz bleiben aktiv. Die
+VPN-Steuerung wartet auf den Neustart, der den neuen Code lädt. Prüfung und
+Installation erfolgen nur auf Anfrage und sind im Demomodus deaktiviert.
+
+Die Installation in der App benötigt Git und den Branch `main` des offiziellen
+Repositorys. Sie führt ein Fast-Forward-Update aus, entsprechend `git pull --ff-only`.
+Persönliche Übersetzungen bleiben außerhalb des Projektordners. Nicht zum Commit
+vorgemerkte Änderungen an gültigen mitgelieferten Sprachdateien werden vor dem Update
+gesichert und in die persönlichen Übersetzungen übernommen. Andere lokale Änderungen,
+vorgemerkte Dateien oder eigene Commits erfordern ein manuelles Update.
+
+![Update-Dialog auf Deutsch mit beispielhaften Versionsdaten](docs/de/updates.png)
+
 Der Starter verweist auf den Projektordner. Behalte ihn daher an seinem Platz.
-Aktualisiere ein Git-Checkout mit `git pull` und führe anschließend
+Manuell aktualisierst du ein Git-Checkout mit `git pull --ff-only` und führst anschließend
 `/usr/bin/python3 install.py` erneut aus. Bei einer ZIP-Installation ersetzt du
 die Projektdateien durch die neue Version und startest den Installer erneut.
-Öffne die App neu, um den aktualisierten Code zu laden.
+Öffne die App neu, um den aktualisierten Code zu laden. **Update-Anleitung** öffnet
+die englischen Hinweise zur Aktualisierung.
 
 Bei aktivierter Startverbindung nutze nach einem Update **Systemstart → Aktuellen
 Standort für den Systemstart speichern**, um auch die geschützten Kopien der
@@ -401,6 +427,8 @@ Die Screenshots stammen aus der echten GTK-Oberfläche mit Demodaten. Die
 /usr/bin/python3 tests/gui_startup_wait.py
 /usr/bin/python3 tests/gui_server_loading.py
 /usr/bin/python3 tests/gui_i18n.py
+/usr/bin/python3 tests/gui_locale_store.py
+/usr/bin/python3 tests/gui_updates.py
 # Kernel-Prüfungen in temporären Benutzer-/Netzwerk-Namespaces:
 /usr/bin/python3 tests/firewall_namespace.py
 ```

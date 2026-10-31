@@ -47,19 +47,24 @@ class Catalog:
     errors: list = field(default_factory=list)
 
 
-def load_catalog(path):
-    data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+def catalog_data(body, code):
+    data = json.loads(body, object_pairs_hook=unique_object)
     if not isinstance(data, dict):
         raise ValueError("A catalog must be a JSON object.")
-    code, name, entries = data.get("language"), data.get("name"), data.get("messages")
-    if not isinstance(code, str) or not LANGUAGE_CODE.fullmatch(code) or path.stem != code:
+    language, name, entries = data.get("language"), data.get("name"), data.get("messages")
+    if not isinstance(language, str) or not LANGUAGE_CODE.fullmatch(language) or language != code:
         raise ValueError("The language code must match the filename, for example de.json or zh-CN.json.")
     if not isinstance(name, str) or not name.strip() or len(name) > 80 or any(ord(c) < 32 for c in name):
         raise ValueError("The language name must be a short, nonempty string.")
     if not isinstance(entries, dict):
         raise ValueError("messages must be a JSON object.")
-    catalog = Catalog(code, name, {})
-    for source, translated in entries.items():
+    return data
+
+
+def load_catalog(path):
+    data = catalog_data(path.read_text(encoding="utf-8"), path.stem)
+    catalog = Catalog(data["language"], data["name"], {})
+    for source, translated in data["messages"].items():
         try:
             if not source or not isinstance(translated, str) or not translated.strip():
                 raise ValueError("Translations must be nonempty strings.")
@@ -73,10 +78,12 @@ def load_catalog(path):
 
 
 class Translator:
-    def __init__(self, language="en", directory=CATALOG_DIRECTORY):
+    def __init__(self, language="en", directory=CATALOG_DIRECTORY, *, user_directory=None):
         self.catalogs = {"en": Catalog("en", "English", {})}
         self.errors = []
         for path in sorted(Path(directory).glob("*.json")):
+            if path.name.startswith("."):
+                continue
             try:
                 catalog = load_catalog(path)
             except (OSError, ValueError) as error:
@@ -84,6 +91,20 @@ class Translator:
                 continue
             self.catalogs[catalog.language] = catalog
             self.errors.extend(f"{path.name}: {error}" for error in catalog.errors)
+        if user_directory is not None:
+            for path in sorted(Path(user_directory).glob("*.json")):
+                if path.name.startswith("."):
+                    continue
+                try:
+                    catalog = load_catalog(path)
+                except (OSError, ValueError) as error:
+                    self.errors.append(f"{path}: {error}")
+                    continue
+                bundled = self.catalogs.get(catalog.language)
+                messages = dict(bundled.messages) if bundled else {}
+                messages.update(catalog.messages)
+                self.catalogs[catalog.language] = Catalog(catalog.language, catalog.name, messages, catalog.errors)
+                self.errors.extend(f"{path}: {error}" for error in catalog.errors)
         self.set_language(language)
 
     def set_language(self, language):

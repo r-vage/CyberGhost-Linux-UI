@@ -13,9 +13,11 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from . import __version__  # noqa: E402
+from .about_dialog import AboutDialog  # noqa: E402
 from .cli import CliError, CyberGhostClient, DemoClient, NetworkUnavailable, Selection, Status  # noqa: E402
 from .preferences import Preferences  # noqa: E402
 from .i18n import Translator, message as msg  # noqa: E402
+from .locale_store import LocaleStore  # noqa: E402
 from .ui_strings import LocalizedCombo, UIStrings  # noqa: E402
 from .server_picker import ServerPicker  # noqa: E402
 from .public_ip import PublicIP, fetch_public_ip  # noqa: E402
@@ -102,9 +104,13 @@ class MainWindow(Gtk.ApplicationWindow):
         self._translating = False
         self.installation = None if client.demo else inspect_installation()
         self.setup_dialog = None
+        self.about_dialog = None
         self._setup_idle = None
         self.alive = True
         self.control_busy = False
+        self.update_busy = False
+        self.update_ready = False
+        self.update_version = None
         self._connection_action = None
         self._active_selection = None
         self._pending_selection = None
@@ -141,6 +147,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.connect("destroy", self._destroy)
         self.connect("key-press-event", self._key_press)
         self._build()
+        for error in self.ui.translator.errors:
+            self._append_log(error)
         self.show_all()
         self.error_box.hide()
         self.demo_note.set_visible(client.demo)
@@ -156,10 +164,10 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _build(self):
         label = self._label
-        header = self.ui(Gtk.HeaderBar(show_close_button=True), title="CyberGhost Desktop", subtitle="A simple home for your Linux VPN")
+        header = self.ui(Gtk.HeaderBar(show_close_button=True), title=f"CyberGhost Desktop · {__version__}", subtitle="A simple home for your Linux VPN")
         self.set_titlebar(header)
         help_button = Gtk.Button.new_from_icon_name("help-about-symbolic", Gtk.IconSize.BUTTON)
-        self.ui.set(help_button, "tooltip-text", "About and keyboard shortcuts")
+        self.ui.set(help_button, "tooltip-text", "About and updates")
         help_button.connect("clicked", self._about)
         header.pack_end(help_button)
         self.refresh_button = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
@@ -817,6 +825,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.startup_toggle.set_sensitive(not busy and self.startup_state.available and (self.startup_state.enabled or startup_ready))
         self.startup_save.set_sensitive(startup_ready and self.startup_state.enabled)
         self.startup_guard.set_sensitive(not busy and self.startup_state.available and self.protocol.get_active_id() == "wireguard")
+        if self.about_dialog is not None:
+            self.about_dialog.sync_actions()
         try:
             command = self._selection().command_preview()
         except ValueError:
@@ -1216,17 +1226,34 @@ class MainWindow(Gtk.ApplicationWindow):
             self.refresh()
 
     def _about(self, *_):
-        dialog = self.ui(Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.INFO, buttons=Gtk.ButtonsType.NONE), text=f"CyberGhost Desktop · {__version__}")
-        dialog.add_button(self.ui.translator.text("Close"), Gtk.ResponseType.CLOSE)
-        self.ui.set(dialog, "secondary-text",
-            "An independent, unofficial interface for the installed CyberGhost Linux CLI.\n\n"
-            "Use Setup in the header to install the CLI or configure your account.\n\n"
-            "Ctrl+F: search locations   ·   F5: refresh   ·   Ctrl+Q: quit\n\n"
-            "The app stores only your choices and favorites. Linux handles administrator authorization. "
-            "Quitting leaves your VPN connection as it is."
-        )
-        dialog.run()
-        dialog.destroy()
+        if not self.alive:
+            return
+        if self.about_dialog is None:
+            self.about_dialog = AboutDialog(self)
+            self.about_dialog.connect("destroy", self._about_closed)
+        self.about_dialog.present()
+
+    def _about_closed(self, *_):
+        self.about_dialog = None
+
+    def begin_update(self):
+        if (self.client.demo or self.control_busy or self._setup_running() or self.startup_state.running
+                or not self._startup_ready or not self.alive):
+            return False
+        self.update_busy = self.control_busy = True
+        self.ui.set(self.operation_note, "label", "Installing update… Keep the app open.")
+        self._sync_controls()
+        self.get_application().sync_tray()
+        return True
+
+    def finish_update(self, *, version=None, restart_required=False):
+        self.update_busy = False
+        self.update_ready = self.control_busy = restart_required
+        self.update_version = version
+        if restart_required:
+            self.ui.set(self.operation_note, "label", "Restart the app before using VPN controls.")
+        self._sync_controls()
+        self.get_application().sync_tray()
 
     def _key_press(self, _widget, event):
         ctrl = event.state & Gdk.ModifierType.CONTROL_MASK
@@ -1242,6 +1269,9 @@ class MainWindow(Gtk.ApplicationWindow):
         return False
 
     def _delete(self, *_):
+        if self.update_busy:
+            self._about()
+            return True
         if self._setup_running():
             self.setup_dialog.present()
             return True
@@ -1249,7 +1279,7 @@ class MainWindow(Gtk.ApplicationWindow):
         if app.tray is not None:
             self.hide()
             return True
-        if self.control_busy:
+        if self.control_busy and not self.update_ready:
             self._show_error(CliError("A VPN or firewall command is still running. Finish or cancel its authorization dialog before closing."))
             return True
         return False
@@ -1265,6 +1295,8 @@ class MainWindow(Gtk.ApplicationWindow):
             GLib.source_remove(self._setup_idle)
         if self.setup_dialog is not None:
             self.setup_dialog.destroy()
+        if self.about_dialog is not None:
+            self.about_dialog.destroy()
         if getattr(self, "_timer", None):
             GLib.source_remove(self._timer)
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -1276,7 +1308,12 @@ class Application(Gtk.Application):
                          flags=Gio.ApplicationFlags.FLAGS_NONE)
         self.client = client or (DemoClient() if demo else CyberGhostClient())
         self.preferences = preferences or Preferences(persistent=not demo)
-        self.translator = Translator(self.preferences.data["language"])
+        self.locale_directory = self.preferences.path.parent / "locales"
+        locale_errors = []
+        if not demo and self.preferences.persistent:
+            locale_errors = LocaleStore(self.locale_directory).sync()
+        self.translator = Translator(self.preferences.data["language"], user_directory=None if demo else self.locale_directory)
+        self.translator.errors.extend(locale_errors)
         self.ui = UIStrings(self.translator)
         self.want_tray = tray
         self.setup_on_start = setup
@@ -1286,6 +1323,7 @@ class Application(Gtk.Application):
         self.tray = None
         self._tray_appearance = None
         self.window = None
+        self.restart_requested = False
 
     def do_activate(self):
         if self.window is None or not self.window.alive:
@@ -1345,13 +1383,22 @@ class Application(Gtk.Application):
             self.tray_disconnect.set_sensitive(self.window.disconnect_button.get_sensitive())
 
     def request_quit(self):
+        if self.window and self.window.update_busy:
+            self.window._about()
+            return
         if self.window and self.window._setup_running():
             self.window.setup_dialog.present()
             return
-        if self.window and self.window.control_busy:
+        if self.window and self.window.control_busy and not self.window.update_ready:
             self.activate()
             self.window._show_error(CliError("Finish or cancel the active authorization/connection request before quitting."))
             return
         if self.window:
             self.window.destroy()
         self.quit()
+
+    def request_restart(self):
+        if not self.window or not self.window.update_ready or self.window.update_busy or self.window._setup_running():
+            return
+        self.restart_requested = True
+        self.request_quit()

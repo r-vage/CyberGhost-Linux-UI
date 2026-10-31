@@ -60,10 +60,28 @@ nor reads/writes real preferences.
 ## Interface languages
 
 The header selector loads 15 interface languages from packaged UTF-8 JSON catalogs
-in `cyberghost_desktop/locales`. Additional catalogs are
-discovered at launch without a language registry in Python. The loader checks
-metadata and named format placeholders, ignores invalid entries and uses English
-for missing translations. An unavailable saved language also falls back to English.
+in `cyberghost_desktop/locales`, overlaid with personal catalogs in
+`$XDG_CONFIG_HOME/cyberghost-desktop/locales` (default `~/.config`). Additional
+catalogs in either folder are discovered at launch without a Python registry.
+The loader checks metadata and named format placeholders. Invalid personal entries
+fall back to the bundled language, then English; malformed files are skipped.
+An unavailable saved language also falls back to English.
+
+`locale_store.py` creates and merges personal copies on normal startup. The
+packaged `locale_manifest.json` contains schema/app versions and SHA-256 hashes
+of shipped files. The personal `.manifest.json` retains prior defaults and their
+hashes, observed source hashes and conflict keys. Three-way merging works per
+message: new keys are added, unchanged defaults follow upstream, and customized
+values survive, including on conflicts. Removed default keys are deleted only
+when unmodified. Unknown baselines preserve existing wording conservatively.
+Personal-only and incomplete languages receive missing English keys. A changed
+bundled file is treated as user work, rather than becoming a trusted baseline.
+
+Atomic writes preserve exact customized originals in content-addressed `.backups`
+before rewriting; `.upstream` holds the latest trusted defaults for conflict
+review. Invalid personal JSON is left untouched. Failed backups prevent rewriting
+the affected catalog and report a load error in Activity. Demo and nonpersistent
+preferences skip synchronization; demo also skips personal catalogs entirely.
 
 `UIStrings` retains the source message for each display property and updates those
 properties in place. Combo rows keep their original CLI IDs. A language change
@@ -74,12 +92,76 @@ and remote location identifiers are preserved. Privileged helpers do not load
 translation files.
 
 `tools/check_translations.py` validates catalog structure, duplicates, source keys,
-placeholder compatibility and coverage. `tests/test_i18n.py` checks discovery,
+placeholder compatibility, coverage and manifest freshness. `--write-manifest`
+regenerates the packaged manifest for a translation PR or version change.
+`tests/test_locale_store.py` checks per-message merging, new personal languages,
+conflicts, backups, unknown baselines and damaged files. `tests/test_i18n.py` checks discovery,
 fallback, malformed input, nested messages and preferences. `tests/gui_i18n.py`
 uses demo backends to check live GTK updates, Setup, selected-server preservation,
 unchanged commands and addresses, saved-language restoration and binding cleanup.
 It switches through every discovered catalog, including right-to-left text.
+`tests/gui_locale_store.py` checks normal startup with temporary personal files,
+automatic discovery, new keys and malformed-file diagnostics using fake backends.
 See the [translation contributor guide](TRANSLATING.md).
+
+## App updates and restart
+
+The header displays `cyberghost_desktop.__version__`. **About and updates** shows
+that version and offers a manual **Check for updates** button. The dialog uses
+the existing worker pool, so a pending request does not block GTK. Repeated clicks
+are ignored while checking, failures can be retried, and callbacks for closed
+dialogs or windows are discarded. Every result is bound to the current UI language.
+
+The update source is the literal `__version__` assignment in
+[`cyberghost_desktop/__init__.py` on main](https://raw.githubusercontent.com/r-vage/CyberGhost-Linux-UI/main/cyberghost_desktop/__init__.py).
+This matches the repository's versioned-commit workflow and works without GitHub
+release entries. Only stable `major.minor.patch` strings are accepted; numeric
+comparison handles multi-digit components and distinguishes a newer local
+development version from an available update. The file is read as text and never
+imported or executed. Update links use a fixed repository URL.
+
+The HTTPS request verifies TLS, has an eight-second socket timeout, reads at most
+8 KiB plus one byte to detect oversized responses, refuses redirects and ignores
+proxy environment variables. It uses the current network route and is subject to
+VPN-only firewall rules. There is no startup polling or automatic installation.
+Demo mode disables checks and installation. ZIP installations use the manual
+update instructions.
+
+**Install update** uses `self_update.py` in the worker pool. It requires a Git
+checkout at the repository root, the official origin and branch `main`, no pending
+Git operation, and no local commits or changes other than valid unstaged/untracked
+language JSON files. It fetches origin/main, checks the downloaded version and
+restart script, verifies fast-forward ancestry, then rechecks HEAD and local edits.
+Only then does it merge with `--ff-only --no-autostash --no-overwrite-ignore`.
+This separates the fetch and integration phases of
+[`git pull --ff-only`](https://git-scm.com/docs/git-pull) to validate before
+changing working files. Git hooks and interactive credential prompts are disabled;
+subprocesses have timeouts. There is no stash, reset, merge commit or force update.
+
+Before restoring modified bundled language files, the updater backs up every
+original and adopts its edits into the personal store using the committed file
+as the old baseline. It rechecks for concurrent edits before restoring defaults.
+Untracked language files are removed from the checkout only after preservation.
+The next startup merges the newly installed defaults and new feature keys into
+these personal files. Other source work, staged files and local commits require
+manual updates. Backup failures leave language source files in place.
+
+During installation, VPN/setup/startup mutations and quitting are blocked. After
+success, VPN controls remain paused until **Restart app** loads the new code.
+The running version stays visible until then. A failure that may have partially
+changed the checkout also requires reopening the app; files are never reset to
+hide a failed update. `__main__.py` restarts through this checkout's `run.sh`,
+preserving `--no-tray` and dropping the one-time `--setup` flag. The VPN and firewall
+are independent of the GUI process and remain active. Protected helper copies
+still require their explicit Setup/Startup update actions after restarting.
+
+`tests/test_updates.py` covers version comparison, literal parsing, malformed and
+oversized responses, network failures, timeouts and redirects. `tests/test_self_update.py`
+uses temporary local Git repositories for updates, local work preservation,
+translation migration, concurrent edits, backup failures and failed checkouts.
+`tests/test_restart.py` checks restart arguments and errors. `tests/gui_updates.py`
+checks manual requests, all 15 languages, retry, duplicate clicks, demo isolation,
+install/quit interlocks and restart with a simulated active VPN and protection.
 
 ## Public IP and layout
 
@@ -436,8 +518,8 @@ these cases with controlled futures and the real GTK widgets.
 
 ## Documentation captures
 
-`tools/capture_docs.py` refreshes `docs/desktop.png`, `docs/setup.png` and
-`docs/startup.png`, and renders five annotated pages in `docs/tour/` for the
+`tools/capture_docs.py` refreshes `docs/desktop.png`, `docs/setup.png`,
+`docs/startup.png` and `docs/updates.png`, and renders five annotated pages in `docs/tour/` for the
 [visual tour](Visual_Tour.md). It uses the actual GTK widget tree with Cairo/Pango
 for the surrounding titles, numbered callouts and outlines. There is no ComfyUI,
 browser or image-generation dependency.
@@ -455,9 +537,9 @@ PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/capture_docs.py --output /tmp/c
 ```
 
 The script always uses the demo client, non-persistent preferences, demo firewall
-and startup managers, plus a simulated Setup state. Subprocess and setup actions
-are blocked during capture. Its example servers and public addresses are not
-read from the host VPN or an online catalog.
+and startup managers, plus simulated Setup and update states. Subprocess, setup
+and online update actions are blocked during capture. Its example servers, public
+addresses and available version are not read from the host VPN or online services.
 
 For a separate GTK display, start this in one terminal:
 
@@ -473,7 +555,7 @@ GDK_BACKEND=broadway BROADWAY_DISPLAY=:8 \
 /usr/bin/python3 tools/capture_docs.py --output /tmp/cyberghost-docs
 ```
 
-Stop that temporary `broadwayd` with Ctrl+C when finished. Review all eight images
+Stop that temporary `broadwayd` with Ctrl+C when finished. Review all nine images
 at full size, especially popover placement, expanded sections and callout targets.
 GTK theme/font differences may slightly change dimensions; captures wait for
 layout to stabilize and reject hidden targets or overlapping callout boxes.

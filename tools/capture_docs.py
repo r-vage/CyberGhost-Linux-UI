@@ -22,6 +22,7 @@ from gi.repository import Gio, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from cyberghost_desktop import __version__  # noqa: E402
 from cyberghost_desktop.app import Application  # noqa: E402
 from cyberghost_desktop.authorization import AuthorizationStatus  # noqa: E402
 from cyberghost_desktop.cli import Choice, DemoClient  # noqa: E402
@@ -29,6 +30,7 @@ from cyberghost_desktop.i18n import Translator  # noqa: E402
 from cyberghost_desktop.preferences import Preferences  # noqa: E402
 from cyberghost_desktop.setup_dialog import SetupDialog  # noqa: E402
 from cyberghost_desktop.setup_tasks import Installation  # noqa: E402
+from cyberghost_desktop.updates import UpdateInfo  # noqa: E402
 
 
 class TourClient(DemoClient):
@@ -368,7 +370,16 @@ def main():
                  ])
             dialog.destroy()
             window.setup_dialog = None
-        print("Captured three README screenshots" + ("." if options.readme_only else " and five annotated tour screens.") +
+        with (patch.object(window.client, "demo", False), patch.object(window, "installation", installation),
+              patch("cyberghost_desktop.about_dialog.checkout_available", return_value=True)):
+            window._about()
+            dialog = window.about_dialog
+            # Illustrate an available update without contacting GitHub or Git.
+            prefix, patch_number = __version__.rsplit(".", 1)
+            dialog._checked(UpdateInfo(f"{prefix}.{int(patch_number) + 1}", "available"))
+            capture(dialog, output / "updates.png")
+            dialog.destroy()
+        print("Captured four README screenshots" + ("." if options.readme_only else " and five annotated tour screens.") +
               " Demo data only; language: " + options.language, flush=True)
     finally:
         if app.window and app.window.alive:
@@ -379,6 +390,6 @@ def main():
 if __name__ == "__main__":
     with ExitStack() as safety:
         for target in ("subprocess.run", "subprocess.Popen", "cyberghost_desktop.setup_tasks.run_in_terminal",
-                       "cyberghost_desktop.authorization.configure"):
+                       "cyberghost_desktop.authorization.configure", "cyberghost_desktop.updates.build_opener"):
             safety.enter_context(patch(target, side_effect=external_action))
         main()

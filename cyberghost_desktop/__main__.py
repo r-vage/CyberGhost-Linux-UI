@@ -1,4 +1,6 @@
 import argparse
+import os
+from pathlib import Path
 import sys
 
 from . import __version__
@@ -46,7 +48,20 @@ def main():
         return 1
     GLib.set_prgname("cyberghost-desktop")
     GLib.set_application_name("CyberGhost Desktop")
-    return Application(demo=args.demo, tray=not args.no_tray, setup=args.setup).run([sys.argv[0]])
+    app = Application(demo=args.demo, tray=not args.no_tray, setup=args.setup)
+    result = app.run([sys.argv[0]])
+    if app.restart_requested:
+        # Replace the exited GTK process so the new instance can own the app's
+        # D-Bus name. The VPN is independent of this process and stays connected.
+        command = ["/bin/sh", str(Path(__file__).resolve().parents[1] / "run.sh")]
+        if args.no_tray:
+            command.append("--no-tray")
+        try:
+            os.execv(command[0], command)
+        except OSError:
+            print(app.translator.text("The app could not restart. Close it and open it again."), file=sys.stderr)
+            return 1
+    return result
 
 
 if __name__ == "__main__":

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4 — 2026-10-31
+
+- Show the current version and add on-demand update checks, installation and restart in About. Compare stable versions published on GitHub; keep network and Git work asynchronous. Demo mode disables update actions.
+- Fast-forward official main-branch checkouts after checking version and ancestry. Preserve local work, back up and migrate unstaged translation edits, and require manual updates for other local changes or commits. Keep VPN/protection active and pause VPN controls until the app restarts.
+- Create editable personal language files outside Git. Use versioned manifests, hashes and previous defaults to merge messages individually: add new feature keys, update untouched translations and retain custom wording. Save exact backups, conflict keys and current upstream copies. Personal-only languages also receive new English keys and are discovered at startup.
+- Translate all update controls into 15 languages and document translation maintenance. Test real updates in temporary repositories, translation merging and backup failures, restart behavior and the GTK workflow with an active simulated VPN.
+
 ## 0.1.3 — 2026-10-31
 
 - Add a language selector with 15 complete catalogs: Arabic, English, French, German, Hebrew, Italian, Japanese, Korean, Persian, Brazilian Portuguese, Russian, Spanish, Turkish, Simplified Chinese and Traditional Chinese. Translate controls, setup, tooltips and app status text immediately while preserving VPN state, server selections and command arguments. Save the choice outside demo mode.
