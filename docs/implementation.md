@@ -112,17 +112,30 @@ the existing worker pool, so a pending request does not block GTK. Repeated clic
 are ignored while checking, failures can be retried, and callbacks for closed
 dialogs or windows are discarded. Every result is bound to the current UI language.
 
-The update source is the literal `__version__` assignment in
-[`cyberghost_desktop/__init__.py` on main](https://raw.githubusercontent.com/r-vage/CyberGhost-Linux-UI/main/cyberghost_desktop/__init__.py).
+The checker first resolves `refs/heads/main` through GitHub's
+[Get a reference API](https://docs.github.com/en/rest/git/refs#get-a-reference),
+using a unique query parameter and no-cache headers on each explicit check.
+It validates the branch name, object type and hexadecimal commit ID, then reads
+the literal `__version__` assignment in `cyberghost_desktop/__init__.py` through
+that exact commit's raw URL. Response-supplied URLs are never followed.
+The API is public and requires neither Git nor a token; rate limits and other
+HTTP failures are reported as check failures without falling back to stale data.
+
+This fixes a reproduced caching issue: after commit `b754a88` was pushed, Git and
+the branch API returned that commit with version `0.1.4`, while the raw `main`
+URL still returned `0.1.3` with `Cache-Control: max-age=300` and `X-Cache: HIT`.
+Adding a query parameter to the raw branch URL did not bypass that response.
+Reading the file by commit returned the correct version immediately.
+
 This matches the repository's versioned-commit workflow and works without GitHub
 release entries. Only stable `major.minor.patch` strings are accepted; numeric
 comparison handles multi-digit components and distinguishes a newer local
 development version from an available update. The file is read as text and never
 imported or executed. Update links use a fixed repository URL.
 
-The HTTPS request verifies TLS, has an eight-second socket timeout, reads at most
-8 KiB plus one byte to detect oversized responses, refuses redirects and ignores
-proxy environment variables. It uses the current network route and is subject to
+Both HTTPS requests verify TLS, each has an eight-second socket timeout and reads at most
+8 KiB plus one byte to detect oversized responses, and both refuse redirects and ignore
+proxy environment variables. They use the current network route and are subject to
 VPN-only firewall rules. There is no startup polling or automatic installation.
 Demo mode disables checks and installation. ZIP installations use the manual
 update instructions.
@@ -155,8 +168,9 @@ preserving `--no-tray` and dropping the one-time `--setup` flag. The VPN and fir
 are independent of the GUI process and remain active. Protected helper copies
 still require their explicit Setup/Startup update actions after restarting.
 
-`tests/test_updates.py` covers version comparison, literal parsing, malformed and
-oversized responses, network failures, timeouts and redirects. `tests/test_self_update.py`
+`tests/test_updates.py` covers version comparison, stale branch responses, fresh
+commit resolution, literal parsing, malformed and oversized metadata, network
+failures, timeouts and redirects. `tests/test_self_update.py`
 uses temporary local Git repositories for updates, local work preservation,
 translation migration, concurrent edits, backup failures and failed checkouts.
 `tests/test_restart.py` checks restart arguments and errors. `tests/gui_updates.py`

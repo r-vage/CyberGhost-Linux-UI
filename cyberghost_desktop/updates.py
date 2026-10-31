@@ -2,13 +2,16 @@
 
 from dataclasses import dataclass
 from http.client import HTTPException
+import json
 import re
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from uuid import uuid4
 
 from . import __version__
 
 REPOSITORY_URL = "https://github.com/r-vage/CyberGhost-Linux-UI"
-VERSION_URL = "https://raw.githubusercontent.com/r-vage/CyberGhost-Linux-UI/main/cyberghost_desktop/__init__.py"
+REFERENCE_URL = "https://api.github.com/repos/r-vage/CyberGhost-Linux-UI/git/ref/heads/main"
+VERSION_URL = "https://raw.githubusercontent.com/r-vage/CyberGhost-Linux-UI/{commit}/cyberghost_desktop/__init__.py"
 UPDATE_GUIDE_URL = REPOSITORY_URL + "#update-move-or-uninstall"
 MAX_VERSION_BYTES = 8192
 CHECK_TIMEOUT = 8
@@ -55,21 +58,48 @@ def published_version(body):
         raise UpdateError(VERSION_ERROR) from None
 
 
-def check_for_updates(current_version=__version__):
-    current = version_numbers(current_version)
-    # Use this computer's current network route, including VPN-only rules,
-    # without inheriting a separate proxy or following redirects elsewhere.
-    opener = build_opener(ProxyHandler({}), NoUpdateRedirects())
-    request = Request(VERSION_URL, headers={
+def published_commit(body):
+    try:
+        reference = json.loads(body)
+        commit = reference["object"]["sha"]
+        if (reference["ref"] != "refs/heads/main" or reference["object"]["type"] != "commit"
+                or not isinstance(commit, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit)):
+            raise ValueError("Invalid main-branch commit")
+        return commit
+    except (UnicodeError, ValueError, KeyError, TypeError):
+        raise UpdateError(VERSION_ERROR) from None
+
+
+def _read_metadata(opener, url, current_version, *, accept="text/plain"):
+    request = Request(url, headers={
         "User-Agent": f"CyberGhostDesktop/{current_version}",
-        "Accept": "text/plain",
+        "Accept": accept,
         "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
     })
+    if accept == "application/vnd.github+json":
+        request.add_header("X-GitHub-Api-Version", "2026-03-10")
     try:
         with opener.open(request, timeout=CHECK_TIMEOUT) as response:
             body = response.read(MAX_VERSION_BYTES + 1)
     except (OSError, HTTPException):
         raise UpdateError(NETWORK_ERROR) from None
+    if len(body) > MAX_VERSION_BYTES:
+        raise UpdateError(VERSION_ERROR)
+    return body
+
+
+def check_for_updates(current_version=__version__):
+    current = version_numbers(current_version)
+    # Use this computer's current network route, including VPN-only rules,
+    # without inheriting a separate proxy or following redirects elsewhere.
+    opener = build_opener(ProxyHandler({}), NoUpdateRedirects())
+    # Raw branch URLs can serve an old file even with no-cache and a query
+    # parameter. Resolve main afresh, then read its immutable commit URL.
+    reference = _read_metadata(opener, REFERENCE_URL + "?check=" + uuid4().hex, current_version,
+                               accept="application/vnd.github+json")
+    commit = published_commit(reference)
+    body = _read_metadata(opener, VERSION_URL.format(commit=commit), current_version)
     latest_version = published_version(body)
     latest = version_numbers(latest_version)
     state = "available" if latest > current else "current" if latest == current else "ahead"

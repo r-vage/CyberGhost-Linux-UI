@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5 — 2026-10-31
+
+- Fix update checks reporting an older version immediately after a push. Resolve the current main-branch commit through GitHub's API, then read the version from that exact commit, avoiding stale raw branch responses.
+- Validate branch metadata and bound both requests. Test cached branch content, fresh commit lookups, malformed responses and network failures.
+
 ## 0.1.4 — 2026-10-31
 
 - Show the current version and add on-demand update checks, installation and restart in About. Compare stable versions published on GitHub; keep network and Git work asynchronous. Demo mode disables update actions.
