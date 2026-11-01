@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.6 — 2026-11-01
+
+- Refresh all English, German and Chinese README screenshots and the five visual-tour pages for the compact header, ping controls and smaller VPN-only checkbox. Add header and ping callouts using simulated demo data.
+- Limit the VPN-only checkbox's clickable area to the checkbox and its label, preventing accidental toggles from empty space across the connection card.
+- Move the yellow app title to the left, keep only the close window button, and use matching square icons for language, Setup, Refresh and About. Keep the language selector in a popover and match Connect/Disconnect to the compact ping button height.
+- Add a Start/Stop ping button beside Connect and Disconnect, below the current public IP, with a live millisecond readout. Measure ICMP latency to 1.1.1.1 over the current connection without administrator authorization.
+- Cancel probes on Stop, connection changes and window close; ignore late results and honor VPN-only protection. Show missing-tool and permission failures, retain the last result after stopping, and use simulated values in demo mode.
+- Translate the ping controls into all 15 languages and validate probe cancellation, timeouts and GTK behavior.
+
 ## 0.1.5 — 2026-10-31
 
 - Fix update checks reporting an older version immediately after a push. Resolve the current main-branch commit through GitHub's API, then read the version from that exact commit, avoiding stale raw branch responses.

@@ -57,9 +57,48 @@ They use an atomic private file under the user's config directory. Runtime CLI
 output is not persisted. The separate demo client neither invokes subprocesses
 nor reads/writes real preferences.
 
+## Ping test
+
+The connection card aligns a Start/Stop ping button and a compact millisecond
+readout below the current public IPv4, alongside Connect/Disconnect. The user
+starts each test explicitly. `ping.py` runs the normal-user system `ping` with a
+fixed IPv4 destination (`1.1.1.1`), numeric output, one packet, a two-second reply
+timeout and a three-second deadline. A separate four-second process deadline
+covers a hung utility. The C-locale summary supplies the measured round-trip time;
+exit status 1 means no reply, while missing tools, permission failures and invalid
+output produce a retryable error. No shell, privilege escalation, proxy, DNS
+lookup or firewall exception is used.
+
+Each sample runs through the existing worker pool. The next probe is scheduled
+one second after the previous result, so slow replies cannot accumulate tasks.
+Stop sets a cancellation event, kills and reaps a running probe, removes the
+timer and invalidates its callback. The last value remains visible with a stopped
+tooltip. Connection/status changes, setup, startup and firewall actions clear the
+result and stop the test; disconnected VPN-only/unknown firewall states disable
+it. Closing to the tray also stops the test. Demo mode never starts a subprocess.
+Results are kept only in memory, and the target is identified in the tooltips.
+
+This is native ICMP latency through the current route, not a bandwidth test or a
+measurement to a selected-but-unconnected VPN server. The reference
+[Meter.net ping test](https://www.meter.net/ping-test/) uses WebSockets to its own
+test servers, so its values are not expected to match this target.
+
+`tests/test_ping.py` checks bounded command arguments, precision, no reply,
+missing tools, malformed results, cancellation and hung-process cleanup.
+`tests/gui_ping.py` uses real GTK widgets with demo data and deferred replies to
+check Start/Stop, repeated samples, stale callbacks, connection/protection changes,
+close-to-tray cleanup, all interface languages and the requested layout.
+
 ## Interface languages
 
-The header selector loads 15 interface languages from packaged UTF-8 JSON catalogs
+The title bar places the yellow app title and subtitle on the left, with square
+language, Setup, Refresh and About buttons beside the native close control on the
+right. The explicit `:close` decoration layout omits minimize/maximize controls.
+The language button opens the selector in a popover; icon actions retain localized
+tooltips and accessible names. Connect, Disconnect and Start/Stop ping share the
+same compact button height through a GTK size group.
+
+The language selector loads 15 interface languages from packaged UTF-8 JSON catalogs
 in `cyberghost_desktop/locales`, overlaid with personal catalogs in
 `$XDG_CONFIG_HOME/cyberghost-desktop/locales` (default `~/.config`). Additional
 catalogs in either folder are discovered at launch without a Python registry.
@@ -551,9 +590,23 @@ PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 tools/capture_docs.py --output /tmp/c
 ```
 
 The script always uses the demo client, non-persistent preferences, demo firewall
-and startup managers, plus simulated Setup and update states. Subprocess, setup
+and startup managers, a simulated ping result, plus simulated Setup and update states. Subprocess, setup
 and online update actions are blocked during capture. Its example servers, public
 addresses and available version are not read from the host VPN or online services.
+
+The desktop screenshots show a running demo ping. The connection tour identifies
+the ping controls and outlines only the compact VPN-only checkbox; the locations
+tour also identifies the square header controls.
+
+Refresh the translated README images with the same capture workflow:
+
+```sh
+/usr/bin/python3 tools/capture_docs.py --language de --readme-only --output docs/de
+/usr/bin/python3 tools/capture_docs.py --language zh-CN --readme-only --output docs/zh-CN
+```
+
+Together these are 17 images: four README screenshots per language and five
+annotated English tour pages. The existing Markdown image paths stay the same.
 
 For a separate GTK display, start this in one terminal:
 
@@ -569,7 +622,7 @@ GDK_BACKEND=broadway BROADWAY_DISPLAY=:8 \
 /usr/bin/python3 tools/capture_docs.py --output /tmp/cyberghost-docs
 ```
 
-Stop that temporary `broadwayd` with Ctrl+C when finished. Review all nine images
+Stop that temporary `broadwayd` with Ctrl+C when finished. Review all generated images
 at full size, especially popover placement, expanded sections and callout targets.
 GTK theme/font differences may slightly change dimensions; captures wait for
 layout to stabilize and reject hidden targets or overlapping callout boxes.

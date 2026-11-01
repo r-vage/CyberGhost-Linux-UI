@@ -9,7 +9,7 @@ owner; this project is not affiliated with CyberGhost.
 **[Take the visual tour](docs/Visual_Tour.md)** for annotated screenshots of
 locations, connection controls, startup and setup.
 
-![CyberGhost Desktop with country flags and its connected status icon in demo mode](docs/desktop.png)
+![CyberGhost Desktop with the yellow title, square header controls, live demo ping and compact VPN-only checkbox](docs/desktop.png)
 
 ## What it does
 
@@ -181,7 +181,7 @@ sh ./run.sh --check      # Show distro, dependency and boot-service capabilities
 
 ## Language and translations
 
-Use the language selector at the top left of the window. The app includes Arabic,
+Open the globe button in the title bar to choose a language. The app includes Arabic,
 English, French, German, Hebrew, Italian, Japanese, Korean, Persian, Brazilian
 Portuguese, Russian, Spanish, Turkish, Simplified Chinese and Traditional Chinese.
 Each language appears under its native name. The interface updates immediately
@@ -265,6 +265,17 @@ confirmed. Refresh checks again; Disconnect remains available for an existing tu
 Disconnect before connecting somewhere else. Streaming selections keep their
 exact service name and let CyberGhost choose the matching server. City and server
 loads are snapshots supplied by the CLI, not speed tests.
+
+Use **Start ping**, to the right of Connect and Disconnect below the current IP,
+to see the latest round-trip time in milliseconds. It sends one ICMP probe to
+`1.1.1.1` at a time over the current connection, with a one-second pause between
+probes. **Stop ping** cancels the test and keeps the last result; connection
+changes or closing the window stop it automatically. **No reply** means the
+target did not answer, including when ICMP is filtered. This measures latency;
+it does not measure download/upload speed or the selected VPN server's load.
+The optional test needs the system `ping` utility (`iputils-ping` on Debian/Ubuntu,
+`iputils` on Fedora/Arch). It runs without an administrator prompt, respects
+VPN-only protection, and uses simulated values in demo mode.
 
 The locations panel keeps its width when the window is resized; the right side
 uses the additional space. Drag the divider to choose a different sidebar width.
@@ -412,6 +423,7 @@ to regenerate them with demo data and no active VPN.
 /usr/bin/python3 tests/gui_i18n.py
 /usr/bin/python3 tests/gui_locale_store.py
 /usr/bin/python3 tests/gui_updates.py
+/usr/bin/python3 tests/gui_ping.py
 # Kernel checks in disposable user/network namespaces; never the host firewall:
 /usr/bin/python3 tests/firewall_namespace.py
 ```

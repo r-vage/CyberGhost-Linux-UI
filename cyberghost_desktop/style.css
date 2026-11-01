@@ -1,6 +1,6 @@
 window.cyberghost, dialog.cyberghost { background: #12161c; color: #eef1f5; }
-.cyberghost headerbar { background: #181d25; border-bottom: 1px solid #303846; box-shadow: none; }
-.cyberghost headerbar .title { font-size: 16px; font-weight: 700; }
+.cyberghost headerbar { background: #181d25; border-bottom: 1px solid #303846; box-shadow: none; padding: 6px 8px; }
+.cyberghost headerbar .title { color: #f4c95c; font-size: 16px; font-weight: 700; }
 .cyberghost headerbar .subtitle { color: #9ba8b9; font-size: 11px; }
 .cyberghost .sidebar { background: #181d25; border-right: 1px solid #303846; }
 .cyberghost .eyebrow { color: #9ba8b9; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
@@ -20,7 +20,7 @@ window.cyberghost, dialog.cyberghost { background: #12161c; color: #eef1f5; }
 .cyberghost button:hover { background: #303d50; border-color: #63738b; }
 .cyberghost button:checked { background: #3d3523; color: #ffda7b; border-color: #a9873c; }
 .cyberghost button:disabled { color: #6e7b8e; background: #1c232d; border-color: #2c3542; }
-.cyberghost button.primary { background: #f4c95c; color: #171a20; border-color: #f4c95c; font-weight: 700; padding: 13px 25px; }
+.cyberghost button.primary { background: #f4c95c; color: #171a20; border-color: #f4c95c; font-weight: 700; }
 .cyberghost button.primary:hover { background: #ffdc83; }
 .cyberghost button.primary:disabled { background: #3c3c34; border-color: #3c3c34; color: #858571; }
 .cyberghost button.danger { color: #f6a7a7; }
@@ -34,9 +34,11 @@ window.cyberghost, dialog.cyberghost { background: #12161c; color: #eef1f5; }
 .cyberghost entry:focus { border-color: #f4c95c; }
 .cyberghost entry image { color: #a9b4c4; }
 .cyberghost combobox button { padding: 9px; }
+.cyberghost headerbar button.header-action,
+.cyberghost headerbar button.titlebutton { min-width: 20px; min-height: 20px; padding: 7px; margin: 0; }
 .cyberghost combobox:disabled button { color: #778497; }
 .cyberghost button.server-picker { padding: 9px; }
-popover.server-menu { background: #181e27; color: #eef1f5; border: 1px solid #3b4758; }
+popover.server-menu, popover.language-menu { background: #181e27; color: #eef1f5; border: 1px solid #3b4758; }
 popover.server-menu treeview { background: #181e27; color: #eef1f5; }
 popover.server-menu treeview:selected { background: #383324; color: #ffda7b; }
 .cyberghost list.locations { background: transparent; }

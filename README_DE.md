@@ -12,7 +12,7 @@ Verbindungssteuerung, Systemstart und Einrichtung mit beschrifteten Screenshots
 (auf Englisch). Die folgenden Aufnahmen zeigen die echte deutsche Oberfläche
 mit Demodaten und verändern keine VPN-Verbindung.
 
-![Deutsche Oberfläche mit Sprachauswahl, Länderflaggen und verbundenem VPN im Demomodus](docs/de/desktop.png)
+![Deutsche Oberfläche mit gelbem Titel, quadratischen Symbolschaltflächen, Demo-Ping und kompaktem VPN-Schutz](docs/de/desktop.png)
 
 ## Funktionen
 
@@ -176,7 +176,7 @@ sh ./run.sh --check      # Distribution, Abhängigkeiten und Startdienst-Funktio
 
 ## Sprache und Übersetzungen
 
-Wähle oben links im Fenster eine Sprache. Verfügbar sind Arabisch, Deutsch,
+Öffne die Globus-Schaltfläche in der Titelleiste, um eine Sprache zu wählen. Verfügbar sind Arabisch, Deutsch,
 Englisch, Französisch, Hebräisch, Italienisch, Japanisch, Koreanisch, Persisch,
 Portugiesisch (Brasilien), Russisch, Spanisch, Türkisch sowie vereinfachtes und
 traditionelles Chinesisch. Jede Sprache erscheint unter ihrem Eigennamen. Die

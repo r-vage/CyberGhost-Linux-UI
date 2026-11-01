@@ -1,8 +1,8 @@
 # CyberGhost Linux UI visual tour
 
 Choose a VPN destination, check its connection, and manage protection and startup
-from a native Linux desktop window. This tour uses the same numbered amber
-callouts as the Eclipse tour, applied to the real GTK interface.
+from a native Linux desktop window. Numbered callouts identify the controls in
+the real GTK interface.
 
 All screenshots use demo data: example addresses, servers and setup state.
 Capturing them does not connect a VPN, change firewall rules or install software.
@@ -21,13 +21,17 @@ Search by country name or country code. The location menu switches between
 app, so they remain available offline. Use the star beside **Selected location**
 to save a favorite, then **Favorites** to filter the sidebar.
 
+The yellow app title sits on the left. Square buttons on the right open language
+choices (globe), **Setup** (tools), **Refresh**, and **About and updates**. The
+window keeps a single close button.
+
 Choose **WireGuard** or **OpenVPN**; the latter also offers UDP/TCP transport.
 Leave the city and server on **Automatic**, or choose them individually. The
 server picker scrolls within a compact menu. Automatic stays at the top,
 followed by the lowest reported loads; unknown loads come last. A lower load
 means less reported server utilization, but it is not a speed or latency test.
 
-![Location search, country flags, favorites, protocol choices and the scrolling server picker](tour/locations.png)
+![Updated header controls, location search, favorites, protocol choices and the scrolling server picker](tour/locations.png)
 
 The list shows when servers are loading or refreshing. Cached choices remain
 visible during refresh. After a protected disconnect, reconnecting allows a
@@ -47,12 +51,19 @@ icon, so the state does not rely on color alone.
 when the app opened, the previous address remains unknown. These addresses stay
 in memory.
 
-![Connected panel with public IPv4 comparison, VPN-only protection and Connect enabled for a changed server](tour/connection.png)
+Use **Start ping** beside Connect and Disconnect, below the current IP, to measure
+latency through the VPN to `1.1.1.1`. The small label shows milliseconds.
+**Stop ping** keeps the last result; changing the connection stops and clears the
+test. These screenshots show simulated demo values, not a real speed measurement.
+
+![Connected panel with public IPv4 comparison, Start/Stop ping, compact VPN-only checkbox and matching button heights](tour/connection.png)
 
 Enable **VPN only (WireGuard)** after connecting to block direct internet and
 LAN traffic outside the tunnel. Protection remains on after **Disconnect** or
 **Quit**, until disabled or rebooted. You can reconnect or change WireGuard
 servers while it remains enabled.
+Only the checkbox and its label are clickable; empty space beside it does not
+toggle protection.
 
 To switch servers, select a new destination and click **Connect**. The app stops
 and verifies the old connection before starting the new one. Changing the
@@ -96,7 +107,7 @@ tunnel. **Ctrl+F** focuses location search and **Ctrl+Q** quits the app.
 
 ## Install the CLI and manage authorization
 
-Open **Setup** in the header. It checks the official CLI, account configuration
+Open **Setup** using the tools icon in the header. It checks the official CLI, account configuration
 and Linux authorization support. Download the Linux CLI from your CyberGhost
 account, extract it, and choose its **install.sh**. The official installer runs
 in a terminal. An active CyberGhost subscription is required.

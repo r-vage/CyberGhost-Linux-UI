@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 import re
+from threading import Event
 import time
 
 import gi
@@ -21,6 +22,7 @@ from .locale_store import LocaleStore  # noqa: E402
 from .ui_strings import LocalizedCombo, UIStrings  # noqa: E402
 from .server_picker import ServerPicker  # noqa: E402
 from .public_ip import PublicIP, fetch_public_ip  # noqa: E402
+from .ping import PING_TARGET, measure_ping  # noqa: E402
 from .setup_dialog import SetupDialog  # noqa: E402
 from .setup_tasks import inspect_installation  # noqa: E402
 from .startup import DemoStartup, StartupManager, StartupState  # noqa: E402
@@ -119,6 +121,9 @@ class MainWindow(Gtk.ApplicationWindow):
         self.current_ip = None
         self._ip_state = None
         self._ip_pending = False
+        self._ping_cancel = None
+        self._ping_timer = None
+        self._ping_state = None
         self.guard_state = GuardStatus("unknown", "Checking VPN-only protection…")
         self._guard_pending = False
         self._setting_guard = False
@@ -165,27 +170,42 @@ class MainWindow(Gtk.ApplicationWindow):
     def _build(self):
         label = self._label
         header = self.ui(Gtk.HeaderBar(show_close_button=True), title=f"CyberGhost Desktop · {__version__}", subtitle="A simple home for your Linux VPN")
+        header.set_decoration_layout(":close")
+        header.set_custom_title(Gtk.Box())
+        title_box = box(spacing=0)
+        title_box.set_valign(Gtk.Align.CENTER)
+        self.app_title = label(f"CyberGhost Desktop · {__version__}", "title")
+        title_box.pack_start(self.app_title, False, False, 0)
+        title_box.pack_start(label("A simple home for your Linux VPN", "subtitle"), False, False, 0)
+        header.pack_start(title_box)
         self.set_titlebar(header)
-        help_button = Gtk.Button.new_from_icon_name("help-about-symbolic", Gtk.IconSize.BUTTON)
-        self.ui.set(help_button, "tooltip-text", "About and updates")
+        help_button = self._header_button("help-about-symbolic", "About and updates")
         help_button.connect("clicked", self._about)
         header.pack_end(help_button)
-        self.refresh_button = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
-        self.ui.set(self.refresh_button, "tooltip-text", "Refresh locations and connection status (F5)")
+        self.refresh_button = self._header_button("view-refresh-symbolic", "Refresh locations and connection status (F5)")
         self.refresh_button.connect("clicked", lambda *_: self.refresh())
         header.pack_end(self.refresh_button)
-        self.setup_button = self.ui(Gtk.Button(), label="Setup")
+        self.setup_button = self._header_button("preferences-system-symbolic", "Setup")
         self.ui.set(self.setup_button, "tooltip-text", "Install CyberGhost's CLI or configure your account")
         self.setup_button.connect("clicked", self._show_setup)
         header.pack_end(self.setup_button)
 
+        language_icon = file_icon(Path(__file__).with_name("icons") / "language-symbolic.svg")
+        self.language_button = self._header_button(language_icon, "Language")
+        header.pack_end(self.language_button)
+        self.language_popover = styled(Gtk.Popover.new(self.language_button), "cyberghost", "language-menu")
+        language_box = box(spacing=8, margin=12)
+        language_box.pack_start(label("Language", "eyebrow"), False, False, 0)
         self.language = combo([(code, catalog.name) for code, catalog in self.ui.translator.catalogs.items()], self.ui)
         self.language.set_hexpand(False)
         self.language.set_active_id(self.ui.translator.language)
         self.language.connect("changed", self._language_changed)
         self.ui.set(self.language, "tooltip-text", "Language")
         self.language.get_accessible().set_name(self.ui.translator.text("Language"))
-        header.pack_start(self.language)
+        language_box.pack_start(self.language, False, False, 0)
+        self.language_popover.add(language_box)
+        language_box.show_all()
+        self.language_button.connect("clicked", lambda *_: self.language_popover.popup())
 
         main = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.main_paned = main
@@ -272,6 +292,7 @@ class MainWindow(Gtk.ApplicationWindow):
                                 "An address from before the VPN is shown only if checked while disconnected.")
         card.pack_start(ip_row, False, False, 0)
         actions = box(False, 10)
+        actions.set_margin_top(9)
         self.connect_button = styled(self.ui(Gtk.Button(), label="Connect"), "primary")
         self.ui.set(self.connect_button, "tooltip-text", "Connect using the selected location. Linux will request administrator authorization.")
         self.connect_button.connect("clicked", lambda *_: self._control("connect"))
@@ -282,10 +303,28 @@ class MainWindow(Gtk.ApplicationWindow):
         actions.pack_start(self.disconnect_button, False, False, 0)
         self.spinner = Gtk.Spinner()
         actions.pack_end(self.spinner, False, False, 0)
-        card.pack_start(actions, False, False, 0)
+        ip_row.attach(actions, 0, 2, 1, 1)
+        ping_box = box(False, 10)
+        ping_box.set_margin_top(9)
+        self.ping_button = self.ui(Gtk.Button(), label="Start ping")
+        self.ping_button.set_valign(Gtk.Align.CENTER)
+        self.ui.set(self.ping_button, "tooltip-text", msg("Continuously test latency to {target} over the current connection. Click again to stop.", target=PING_TARGET))
+        self.ping_button.connect("clicked", self._toggle_ping)
+        ping_box.pack_start(self.ping_button, False, False, 0)
+        self.ping_label = label("— ms", "caption")
+        self.ping_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.ping_label.set_max_width_chars(14)
+        self.ui.set(self.ping_label, "tooltip-text", msg("ICMP ping to {target}. Start a test to measure the current connection.", target=PING_TARGET))
+        ping_box.pack_start(self.ping_label, True, True, 0)
+        ip_row.attach(ping_box, 1, 2, 1, 1)
+        self.connection_button_height = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.VERTICAL)
+        for button in (self.connect_button, self.disconnect_button, self.ping_button):
+            button.set_valign(Gtk.Align.CENTER)
+            self.connection_button_height.add_widget(button)
         self.operation_note = label("Authorization is handled by Linux. No password is stored here.", "caption", wrap=True)
         card.pack_start(self.operation_note, False, False, 0)
         self.guard_toggle = self.ui(Gtk.CheckButton(), label="VPN only (WireGuard)")
+        self.guard_toggle.set_halign(Gtk.Align.START)
         self.ui.set(self.guard_toggle, "tooltip-text", "Optional kill switch. Connect with WireGuard, then enable. Blocks direct IPv4, IPv6 and LAN traffic "
             "if the VPN drops. Stays on after Disconnect or Quit, until disabled or reboot. "
             "Stays on while changing WireGuard servers. Requires nftables and Linux authorization.")
@@ -388,6 +427,18 @@ class MainWindow(Gtk.ApplicationWindow):
     def _label(self, text, *classes, wrap=False):
         return self.ui(label("", *classes, wrap=wrap), label=text)
 
+    def _header_button(self, icon, name):
+        image = (Gtk.Image.new_from_gicon(icon, Gtk.IconSize.BUTTON) if isinstance(icon, Gio.Icon)
+                 else Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.BUTTON))
+        button = styled(Gtk.Button(image=image), "header-action")
+        button.set_valign(Gtk.Align.CENTER)
+        self.ui.set(button, "tooltip-text", name)
+        def accessible_name():
+            button.get_accessible().set_name(self.ui.translator.text(name))
+        accessible_name()
+        self.ui.watch(button, accessible_name)
+        return button
+
     def _language_changed(self, *_):
         if self._translating:
             return
@@ -403,6 +454,7 @@ class MainWindow(Gtk.ApplicationWindow):
         finally:
             self._translating = False
         self.language.get_accessible().set_name(self.ui.translator.text("Language"))
+        self.language_popover.popdown()
         self._sync_status_icon()
         self.get_application().sync_tray()
 
@@ -773,6 +825,11 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _sync_controls(self):
         busy = self.control_busy or self._setup_running() or not self._startup_ready or self.startup_state.running
+        ping_ready = (not busy and self.state.state in {"connected", "disconnected"}
+                      and (self.state.state == "connected" or self.guard_state.state == "off"))
+        if not ping_ready or (self._ping_state is not None and self._ping_state != self.state):
+            self._stop_ping(clear=True)
+        self.ping_button.set_sensitive(ping_ready)
         available = bool(self.client.binary)
         ready = self.client.demo or not self.installation.needs_setup
         can_connect = self.guard_state.state == "off" or (self.guard_state.state == "on" and self.protocol.get_active_id() == "wireguard")
@@ -809,6 +866,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.disconnect_button.set_sensitive(not busy and available and self.state.state != "disconnected")
         self.setup_button.set_sensitive(not busy and not self.client.demo)
         self.language.set_sensitive(not self.control_busy and not self._setup_running())
+        self.language_button.set_sensitive(self.language.get_sensitive())
         self.mode.set_sensitive(not busy)
         self.location_list.set_sensitive(not busy)
         self.refresh_button.set_sensitive(not self.control_busy and not self._setup_running())
@@ -935,6 +993,66 @@ class MainWindow(Gtk.ApplicationWindow):
         self.current_ip = None
         self.ui.set(self.current_ip_label, "label", "Waiting for connection…")
         self.ui.set(self.current_ip_label, "tooltip-text", None)
+
+    def _toggle_ping(self, *_):
+        if self._ping_cancel is not None:
+            self._stop_ping()
+            return
+        if not self.alive or not self.ping_button.get_sensitive():
+            return
+        self._ping_cancel = Event()
+        self._ping_state = self.state
+        self.ui.set(self.ping_button, "label", "Stop ping")
+        self.ui.set(self.ping_label, "label", "Testing…")
+        self.ui.set(self.ping_label, "tooltip-text", msg("ICMP ping to {target} over the current connection.", target=PING_TARGET))
+        self._probe_ping()
+
+    def _stop_ping(self, *, clear=False):
+        if self._ping_cancel is not None:
+            self._ping_cancel.set()
+            self._ping_cancel = None
+            self._requests["ping"] = self._requests.get("ping", 0) + 1
+            future = self._futures.get("ping")
+            if future is not None:
+                future.cancel()
+        if self._ping_timer is not None:
+            GLib.source_remove(self._ping_timer)
+            self._ping_timer = None
+        self.ui.set(self.ping_button, "label", "Start ping")
+        if clear:
+            self._ping_state = None
+            self.ui.set(self.ping_label, "label", "— ms")
+            self.ui.set(self.ping_label, "tooltip-text", msg("ICMP ping to {target}. Start a test to measure the current connection.", target=PING_TARGET))
+        elif self._ping_state is not None:
+            if self.ping_label.get_text() == self.ui.translator.text("Testing…"):
+                self.ui.set(self.ping_label, "label", "— ms")
+            self.ui.set(self.ping_label, "tooltip-text", msg("Test stopped. Last result to {target}; start again to refresh.", target=PING_TARGET))
+
+    def _probe_ping(self):
+        self._ping_timer = None
+        cancel = self._ping_cancel
+        if cancel is None or cancel.is_set() or not self.alive:
+            return False
+
+        def loaded(value):
+            display = msg("{ms} ms", ms=f"{value:.1f}") if value is not None else msg("No reply")
+            if self.client.demo:
+                display = msg("Demo · {status}", status=display)
+            self.ui.set(self.ping_label, "label", display)
+            self.ui.set(self.ping_label, "tooltip-text", msg("ICMP ping to {target} over the current connection.", target=PING_TARGET))
+            self._ping_timer = GLib.timeout_add_seconds(1, self._probe_ping)
+
+        def failed(error):
+            self._stop_ping()
+            self.ui.set(self.ping_label, "label", "Ping unavailable")
+            self.ui.set(self.ping_label, "tooltip-text", str(error))
+            self._append_log(msg(str(error)))
+            if getattr(error, "details", ""):
+                self._append_log(error.details)
+
+        probe = self.get_application().ping_probe
+        self._submit("ping", lambda: probe(cancel), loaded, failed)
+        return False
 
     def _refresh_public_ip(self):
         state = self.state.state
@@ -1277,6 +1395,7 @@ class MainWindow(Gtk.ApplicationWindow):
             return True
         app = self.get_application()
         if app.tray is not None:
+            self._stop_ping()
             self.hide()
             return True
         if self.control_busy and not self.update_ready:
@@ -1286,6 +1405,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _destroy(self, *_):
         self.alive = False
+        self._stop_ping()
+        self.language_popover.destroy()
         self.location_list.set_placeholder(None)
         self.empty_list.destroy()
         if self._locations_retry is not None:
@@ -1303,7 +1424,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
 
 class Application(Gtk.Application):
-    def __init__(self, *, demo=False, tray=True, client=None, preferences=None, setup=False, ip_lookup=None, guard=None, startup=None):
+    def __init__(self, *, demo=False, tray=True, client=None, preferences=None, setup=False, ip_lookup=None, guard=None, startup=None, ping_probe=None):
         super().__init__(application_id="io.github.rvage.CyberGhostDesktop" + (".Demo" if demo else ""),
                          flags=Gio.ApplicationFlags.FLAGS_NONE)
         self.client = client or (DemoClient() if demo else CyberGhostClient())
@@ -1318,6 +1439,7 @@ class Application(Gtk.Application):
         self.want_tray = tray
         self.setup_on_start = setup
         self.ip_lookup = ip_lookup or fetch_public_ip
+        self.ping_probe = ping_probe or ((lambda _cancel: 24.0) if demo else measure_ping)
         self.guard = guard or (DemoGuard() if demo else VPNGuard())
         self.startup = startup or (DemoStartup() if demo else StartupManager())
         self.tray = None

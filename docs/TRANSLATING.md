@@ -1,14 +1,14 @@
 # Translating CyberGhost Desktop
 
-The app includes 15 interface languages. Use the language selector
-at the top left of the main window to switch immediately. The choice is saved in
+The app includes 15 interface languages. Open the globe button in the title bar
+to choose a language and switch immediately. The choice is saved in
 the normal preferences file; demo mode does not save it. Changing language updates
 display text while keeping the current selection, connection and protection state.
 
 ## Included languages
 
-Each catalog currently covers all 249 interface messages, including setup,
-updates, tooltips and protection guidance. The selector uses the native name in each file.
+Each catalog covers the interface messages, including setup, updates, ping tests,
+tooltips and protection guidance. The selector uses the native name in each file.
 
 | Language | Selector name | Bundled catalog |
 | --- | --- | --- |

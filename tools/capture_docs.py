@@ -250,7 +250,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=ROOT / "docs", help="Screenshot directory (default: docs)")
     parser.add_argument("--language", choices=tuple(Translator().catalogs), default="en", help="Interface language")
-    parser.add_argument("--readme-only", action="store_true", help="Capture the three README images without the annotated English tour")
+    parser.add_argument("--readme-only", action="store_true", help="Capture the four README images without the annotated English tour")
     options = parser.parse_args()
     output = options.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -283,9 +283,11 @@ def main():
         until(lambda: window.server.popover.get_mapped())
         render_tour(window, gallery / "locations.png", 1, "Choose a location and a server",
              "Country flags, saved favorites and a scrolling server list keep destination choices together.", [
-                 ("left", 230, "Find a location", "Search by country or code. All locations, Streaming and P2P share the same sidebar.",
+                 ("left", 230, "Use the header controls", "The globe opens language choices. The tools icon opens Setup; Refresh and About sit beside Close.",
+                  [window.language_button, window.setup_button, window.refresh_button]),
+                 ("left", 530, "Find a location", "Search by country or code. All locations, Streaming and P2P share the same sidebar.",
                   [window.mode, window.search]),
-                 ("left", 635, "Keep favorites close", "The star saves this location. Favorites filters the list; flags are bundled for offline use.",
+                 ("left", 860, "Keep favorites close", "The star saves this location. Favorites filters the list; flags are bundled for offline use.",
                   [window.favorites_only]),
                  ("right", 680, "Choose the protocol", "WireGuard or OpenVPN. OpenVPN also lets you choose UDP or TCP transport.",
                   [window.protocol]),
@@ -298,17 +300,21 @@ def main():
         until(lambda: window.state.state == "connected" and not window.control_busy)
         window.guard_toggle.set_active(True)
         until(lambda: window.guard_state.state == "on" and not window.control_busy)
+        window.ping_button.clicked()
+        until(lambda: window._ping_timer is not None)
         capture(window, output / "desktop.png")
         window.server.set_active_id("frankfurt-demo-02")
         assert window.connect_button.get_sensitive(), "Changed destination should offer Connect"
         render_tour(window, gallery / "connection.png", 2, "Check the connection and protect other traffic",
-             "The connection panel and tray share the same green, red and amber status icons.", [
+             "Read the current state, test latency through the VPN and manage protection beside the connection controls.", [
                  ("left", 250, "Read the state", "Green arrow: connected. Red cross: disconnected. Amber question mark: changing or unknown status.",
                   [window.status_chip, window.status_icon, window.status_title]),
                  ("right", 280, "Compare public IPv4", "See the address checked before connecting and the current VPN exit. Addresses stay in memory.",
                   [window.before_ip_label, window.current_ip_label]),
-                 ("right", 625, "Keep VPN only on", "Enable after a WireGuard connection. Direct internet and LAN traffic remain blocked after disconnecting.",
-                  [window.guard_toggle, window.guard_label]),
+                 ("right", 560, "Start or stop ping", "Measure latency through the VPN to 1.1.1.1. The small label shows milliseconds; Stop keeps the last result. Demo values are simulated.",
+                  [window.ping_button, window.ping_label]),
+                 ("right", 910, "Keep VPN only on", "Click the checkbox or its label after connecting with WireGuard. Protection stays on after Disconnect; empty space beside it is not clickable.",
+                  [window.guard_toggle]),
                  ("left", 940, "Switch deliberately", "Choose a different destination, then click Connect. The app disconnects the old VPN before connecting to the new one.",
                   [window.connect_button, window.disconnect_button]),
              ])
@@ -330,7 +336,7 @@ def main():
                   [window.startup_save, window.startup_detail]),
              ])
         window.startup_expander.set_expanded(False)
-        window.resize(1080, 1160)
+        window.resize(1080, 1280)
         command_expander = window.command_expander
         command_expander.set_expanded(True)
         window.log_expander.set_expanded(True)
