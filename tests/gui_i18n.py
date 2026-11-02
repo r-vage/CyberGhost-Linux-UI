@@ -76,6 +76,7 @@ with (tempfile.TemporaryDirectory() as directory,
         window.guard_toggle.set_active(True)
         until(lambda: window.guard_state.state == "on" and not window.control_busy)
         window.startup_guard.set_active(True)
+        window.startup_block.set_active(True)
         window.startup_toggle.set_active(True)
         until(lambda: window.startup_state.enabled and not window.control_busy)
         window.startup_expander.set_expanded(True)
@@ -89,14 +90,14 @@ with (tempfile.TemporaryDirectory() as directory,
         log = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
 
         known_labels = {
-            "de": ("Verbinden", "Stadt automatisch wählen", "Demo · Verbunden"),
-            "zh-CN": ("连接", "自动选择城市", "演示 · 已连接"),
-            "en": ("Connect", "Automatic city", "Demo · Connected"),
+            "de": ("Neu verbinden", "Stadt automatisch wählen", "Demo · Verbunden"),
+            "zh-CN": ("重新连接", "自动选择城市", "演示 · 已连接"),
+            "en": ("Reconnect", "Automatic city", "Demo · Connected"),
         }
         for code, catalog in app.translator.catalogs.items():
             labels = catalog.messages
             connect, automatic, active = known_labels.get(code, (
-                labels["Connect"], labels["Automatic city"],
+                labels["Reconnect"], labels["Automatic city"],
                 labels["Demo · {status}"].format(status=labels["Connected"]),
             ))
             window.language.set_active_id(code)
@@ -109,6 +110,8 @@ with (tempfile.TemporaryDirectory() as directory,
             assert window._requests == requests and window._epoch == epoch, "Language must not refresh or reconnect"
             assert window.client.connected and window.guard_state.state == "on"
             assert window.startup_state.enabled and window.startup_guard.get_active()
+            assert window.startup_state.block_until_connected and window.startup_block.get_active()
+            assert window.startup_block.get_label() == labels["Block internet until VPN connects (WireGuard)"]
             assert window.favorite_button.get_active() and window.startup_expander.get_expanded()
             assert window.search.get_text() == "germany"
             assert buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False) == log

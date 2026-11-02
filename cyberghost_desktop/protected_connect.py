@@ -157,6 +157,39 @@ def switch_unprotected(selection, account):
     return output
 
 
+def run_connection(command, guard, group):
+    """Let the newly created tunnel handshake even if boot started with no mark.
+
+    Kernel WireGuard transport sockets need not belong to the CLI's cgroup.
+    Permit only its verified mark, with the same temporary cleanup tag. Keep
+    the CLI exception until it exits; never replace the drop policy here.
+    """
+    marks = set()
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, errors='replace', env=ENV) as process:
+        try:
+            while True:
+                try:
+                    stdout, stderr = process.communicate(timeout=0.25)
+                    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+                except subprocess.TimeoutExpired:
+                    pass
+                try:
+                    mark = guard.wireguard_mark()
+                except RuntimeError:
+                    continue  # wg-quick has not installed its interface and route yet.
+                if mark not in marks:
+                    firewall.ruleset(mark)  # Validate before including it in nft input.
+                    # connection_rule validates the shared cleanup tag as well.
+                    connection_rule(group)
+                    guard.command('nft', '--file', '-', source=(f'insert rule inet {firewall.TABLE} output '
+                        f'meta l4proto udp meta mark {mark} accept comment "{group}"\n'))
+                    marks.add(mark)
+        except BaseException:
+            process.kill()
+            raise
+
+
 def protected_connect(selection, account, *, runtime=firewall.RUNTIME, replace_existing=False):
     args = selection.connect_args()
     if selection.protocol != 'wireguard':
@@ -191,8 +224,7 @@ def protected_connect(selection, account, *, runtime=firewall.RUNTIME, replace_e
                     (job / 'resolv.conf').write_text(direct_resolvers())
                 command = [unshare, '--mount', '--propagation', 'private', '--', '/usr/bin/python3', '-I',
                            str(Path(__file__).resolve()), '--worker', str(job)]
-                result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                        errors='replace', env=ENV, check=False)
+                result = run_connection(command, guard, group.name)
                 output = cli.clean_output(previous + '\n' + result.stdout + '\n' + result.stderr)
                 if result.returncode:
                     raise cli.CliError('CyberGhost could not reconnect. VPN-only protection remains enabled.', output)

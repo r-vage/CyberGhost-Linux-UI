@@ -6,6 +6,7 @@ No traffic or firewall commands can reach the original network namespace.
 """
 
 import errno
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -78,10 +79,7 @@ def inner(original_namespace):
     for name in ("all", "default", "plain0"):
         Path(f"/proc/sys/net/ipv6/conf/{name}/disable_ipv6").write_text("0")
     run("ip", "-6", "addr", "add", "fd18::1/64", "dev", "plain0", "nodad")
-    run("ip", "link", "add", "cyberghost", "type", "wireguard")
-    run("wg", "set", "cyberghost", "fwmark", "51820")
-    run("ip", "link", "set", "cyberghost", "up")
-    run("ip", "route", "add", "default", "dev", "cyberghost")
+    run("ip", "route", "add", "default", "dev", "plain0")
     # A separate application's table must survive activation and removal.
     run("nft", "-f", "-", source='''table inet namespace_observer {
  counter before { }
@@ -128,9 +126,22 @@ def inner(original_namespace):
                 send_datagram("198.18.0.2", existing=existing)
                 previous = os.umask(0o077)
                 try:
-                    result = authorized_action("enable", runtime)
+                    # The early boot helper holds a lock while starting its
+                    # monitor. That child must not retain the lock forever.
+                    with (Path(directory) / 'boot.lock').open('w') as boot_lock:
+                        fcntl.flock(boot_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        result = authorized_action("block", runtime)
                 finally:
                     os.umask(previous)
+                with (Path(directory) / 'boot.lock').open('w') as boot_lock:
+                    deadline = time.monotonic() + 2
+                    while True:
+                        try:
+                            fcntl.flock(boot_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            assert time.monotonic() < deadline, 'Firewall monitor retained the boot lock'
+                            time.sleep(.01)
                 assert result.state == "on"
                 assert runtime.stat().st_mode & 0o777 == 0o755
                 assert request("status", runtime).state == "on"
@@ -138,6 +149,17 @@ def inner(original_namespace):
                 blocked("198.18.0.2")
                 blocked("fd18::2")
                 forwarded("198.18.0.2", False)
+                # At boot there is no tunnel or trusted mark. Block even marked
+                # traffic, while allowing DHCP to establish the uplink.
+                blocked("198.18.0.2", mark=51820)
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as dhcp:
+                    dhcp.bind(('0.0.0.0', 68))
+                    dhcp.sendto(b'namespace DHCP fixture', ('198.18.0.2', 67))
+                run("ip", "link", "add", "cyberghost", "type", "wireguard")
+                run("wg", "set", "cyberghost", "fwmark", "51820")
+                run("ip", "link", "set", "cyberghost", "up")
+                run("ip", "route", "replace", "default", "dev", "cyberghost")
+                assert authorized_action("enable", runtime).state == "on"
                 # Only the marked UDP outer transport may use the direct path.
                 send_datagram("198.18.0.2", mark=51820)
                 blocked("198.18.0.2", mark=123)
@@ -189,7 +211,7 @@ def inner(original_namespace):
             assert Firewall().document() is None
             assert not (runtime / "active").exists()
             assert packets("before") > 0, "An unrelated table was removed"
-            print("Kernel checks passed: IPv4/IPv6, existing connections, marked WireGuard transport, loopback, forwarding, tunnel removal, rule verification and scoped cleanup.", flush=True)
+            print("Kernel checks passed: early boot block without a tunnel, DHCP, IPv4/IPv6, existing connections, marked WireGuard transport, loopback, forwarding, tunnel removal, rule verification and scoped cleanup.", flush=True)
         finally:
             authorized_action("disable", runtime)
             peer.stdin.write("stop\n")

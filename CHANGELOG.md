@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.7 — 2026-11-02
+
+- Add an optional startup setting to block internet before networking starts. Keep ordinary IPv4/IPv6 and LAN traffic blocked while an isolated CyberGhost process connects, allow the verified WireGuard transport, and retain protection on failure. Install the early firewall and network-manager dependencies only when selected; preserve existing post-connect startup behavior. Translate the option into all 15 languages and verify boot handoff, rollback, DNS isolation and kernel traffic blocking.
+- Show saved locations while refreshing the live catalog, including when WireGuard is connected with VPN-only enabled. Keep saved choices available through network/DNS failures and report whether the refresh is pending or failed.
+- Preserve country and city selections during catalog retries, clear destinations removed by a fresh list, and log the first network failure's reason. Add a GTK regression covering connected VPN-only loading and recovery.
+- Wait for boot-service inspection and connection completion before checking the public IP. Recheck VPN/firewall status after boot and discard earlier replies so a stale disconnected state cannot mislabel the VPN exit as the before-VPN IP.
+- Defer uncached city requests until the location catalog recovers, avoiding a second startup DNS failure and traceback from the automatically restored country. Load the cities automatically once the catalog succeeds.
+- Compare the current selection with a completed boot connection after verifying live VPN status, so an unchanged startup destination does not enable reconnecting. Label the connected-state action Reconnect and translate its instructions in all 15 languages.
+
 ## 0.1.6 — 2026-11-01
 
 - Refresh all English, German and Chinese README screenshots and the five visual-tour pages for the compact header, ping controls and smaller VPN-only checkbox. Add header and ping callouts using simulated demo data.

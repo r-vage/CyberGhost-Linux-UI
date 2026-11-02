@@ -19,6 +19,15 @@ def document(handle=1, policy="drop", owner=OWNER):
 
 
 class FirewallTests(unittest.TestCase):
+    def test_early_boot_rules_block_without_guessing_a_transport_mark(self):
+        source = ruleset()
+        self.assertEqual(source.count('policy drop'), 2)
+        self.assertNotIn('meta mark', source)
+        self.assertNotIn('dport 53', source)
+        self.assertNotIn('ct state established', source.split('chain forward')[0])
+        self.assertIn('udp sport 68 udp dport 67 accept', source)
+        self.assertIn('udp sport 546 udp dport 547 accept', source)
+
     def test_mark_is_strict_and_rules_cover_both_ip_versions_and_forwarding(self):
         for invalid in (0, -1, 2**32, "1; flush ruleset", True):
             with self.subTest(mark=invalid), self.assertRaises(ValueError):
@@ -103,7 +112,7 @@ class FirewallTests(unittest.TestCase):
             self.assertFalse((runtime / "active").exists())
 
     def test_socket_allows_unprivileged_status_but_never_mutation(self):
-        for action in ("status", "enable", "disable", "run command"):
+        for action in ("status", "enable", "block", "disable", "run command"):
             with self.subTest(action=action):
                 server = MagicMock()
                 server.makefile.return_value = BytesIO(action.encode() + b"\n")

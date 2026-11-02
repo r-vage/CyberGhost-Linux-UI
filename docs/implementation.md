@@ -28,11 +28,22 @@ cancelled. Errors are visible, and the CLI's result is available in Activity.
 Location requests wait for startup inspection and any running boot connection.
 Known DNS/connection exceptions and catalog timeouts retry every three seconds
 within a three-minute window, without blocking status checks or repeating VPN
-commands. Temporary failures show one waiting message; successful recovery loads
-the list automatically. Permanent account/configuration errors appear immediately,
+commands. Saved catalogs appear while live requests are pending, even with a
+connected tunnel and VPN-only enabled: a routed interface does not guarantee DNS
+or API availability. Temporary failures log one waiting message and the first
+failure's reason; successful recovery replaces the saved list automatically.
+Restoring a saved country shows cached cities immediately, but defers an uncached
+city request until the live catalog succeeds. This prevents a second API request
+from reporting the same transient startup DNS failure as a fatal traceback. City
+loading resumes for the current selection after recovery or a protected reconnect.
+Catalog refreshes have a separate generation from country/city selections, so
+browsing saved choices does not cancel retries or discard fresh results. A removed
+destination clears its dependent choices and invalidates their pending responses.
+Permanent account/configuration errors appear immediately,
 and exhausted network retries expose the error and CLI details. Refresh, category
 changes and window destruction cancel pending retry timers; request tokens and
-selection epochs discard obsolete in-flight results.
+selection epochs discard obsolete in-flight results. Failed refreshes retain saved
+destinations and identify them as saved; they never turn off VPN-only protection.
 Connection status comes from `--status` and read-only Linux interface/routing
 checks, never from a successful connect command, a selected location, or a cached
 preference. CLI 1.5.0 runs `wg show` internally and incorrectly reports no VPN when
@@ -45,6 +56,14 @@ and does not send traffic to that address. Other WireGuard interfaces are ignore
 Missing tools, permission failures, timeouts or incomplete routing produce unknown
 status, which disables Connect while keeping Disconnect available. Connected
 describes the detected tunnel/routing state, not an independent handshake or leak test.
+
+While connected, the action is labeled Reconnect and compares the selected
+destination with the last connection requested through the app. For boot connections,
+a completed current-boot report also supplies that comparison when the startup
+profile has not changed since the report. A fresh live connection check must confirm
+the tunnel before the comparison becomes active; the boot report never sets VPN
+status itself. A later saved startup profile only affects the next boot. Unknown
+external selections remain explicitly reconnectable.
 
 Changing selection or closing the app does not change the VPN. The UI blocks
 quitting during a connection action so it does not kill a privileged command
@@ -222,8 +241,12 @@ The status panel queries `https://1.1.1.1/cdn-cgi/trace` on connection-state cha
 or Refresh. TLS verification is enabled, HTTP proxies and redirects are disabled,
 the response is bounded to 16 KiB, and requests time out after six seconds. Only
 a validated public IPv4 address and optional two-letter country code are retained.
-The address from before connecting is captured only while disconnected. Opening
-the app with an existing VPN does not invent a baseline. IP results are never
+The address from before connecting is captured only while disconnected. IP checks
+wait for initial startup inspection and any running boot connection. When boot
+finishes, the UI discards earlier VPN/firewall replies and checks both states again
+before launching an IP request. A newly observed boot operation also invalidates
+an in-flight IP lookup, preventing its late reply from becoming a false baseline.
+Opening the app with an existing VPN does not invent a baseline. IP results are never
 logged or persisted, and request tokens discard callbacks from an older connection.
 Failures leave VPN status unchanged. With VPN only enabled and the VPN disconnected,
 the UI reports blocked access without attempting the public lookup. Demo and GUI
@@ -260,7 +283,8 @@ only kernel-assigned handles. An activation marker is written before mutation:
 if the helper crashes, the UI reports unknown and offers authorized removal rather
 than assuming off. Disable works without an active tunnel or running helper.
 The monitor exits on disable; reboot removes the transient rules/runtime data.
-No setup files or firewall configuration are installed persistently.
+The main VPN-only toggle installs no persistent configuration. The separate strict
+boot option below installs a service that reapplies protection before networking.
 
 The UI never turns protection off on disconnect, close or reconnect. A protected
 WireGuard Connect uses one polkit-authorized helper. It creates a private root-owned
@@ -269,6 +293,9 @@ cgroup's root sockets. Existing output/forward drop policies stay in place. The
 helper serializes with other firewall changes, verifies the new interface and
 route, refreshes the WireGuard transport mark, and removes its exception on success
 or failure. Cleanup restores the previous rule fingerprint after a failed attempt.
+While the CLI runs, a bounded local interface/route/mark check permits its new
+WireGuard UDP mark, also tagged for cleanup. This allows kernel-owned transport
+sockets to handshake even when the early firewall started without a tunnel or mark.
 
 The CLI gets a private mount namespace with its configured uplink DNS servers and
 `hosts: files dns`, preventing system-resolver requests from other applications from
@@ -286,19 +313,22 @@ requests use saved locations and in-memory city/server choices while disconnecte
 fresh lists can be requested after the new tunnel is up. OpenVPN is outside this
 option's supported scope.
 Existing firewall managers can impose additional restrictions; a root administrator
-can also change/remove these rules. This is not a boot-time or privileged-process
-containment mechanism.
+can also change/remove these rules. This does not contain privileged processes;
+boot protection requires the separate option below.
 
 ## Optional boot connection
 
 Startup is off by default. Enabling it calls `startup_system.py configure` through
-pkexec once, with a validated selection and optional VPN-only flag. The account
+pkexec once, with a validated selection, VPN-only flag and optional
+`block_until_connected` flag (false for older profiles). Strict protection implies
+VPN-only protection after connection and requires WireGuard. The account
 comes from pkexec's authenticated `PKEXEC_UID` and the system password database,
 not a supplied username. The helper verifies that the CLI and its ancestor
 directories are root-owned and not writable by other users. Its existing account
 file must be present; credentials are not read or copied by setup.
 
-The helper installs copies of `startup_system.py`, `cli.py` and `firewall.py` under
+The helper installs copies of `startup_system.py`, `cli.py`, `firewall.py` and
+`protected_connect.py` under
 `/usr/local/libexec/cyberghost-desktop/startup-UID/`, a root-owned data-only profile
 at `/etc/cyberghost-desktop/startup-UID.json`, and the unit
 `cyberghost-desktop-startup-UID.service`. Runtime execution uses isolated Python
@@ -318,6 +348,31 @@ requires the real tunnel and route. Optional VPN-only protection is enabled and
 verified only after connection. Existing firewall rules are never silently disabled
 to make a new connection possible.
 
+Selecting **Block internet until VPN connects (WireGuard)** also installs
+`cyberghost-desktop-boot-guard-UID.service`, enabled at `sysinit.target`, with
+`DefaultDependencies=no`, `Type=oneshot` and `RemainAfterExit=yes`. It runs after
+local filesystems/modules and existing nftables/ufw startup, before
+`network-pre.target`. This ordering follows systemd's
+[network-pre.target contract](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html#network-pre.target).
+App-owned drop-ins add both `Requires=` and `After=` to NetworkManager,
+systemd-networkd, networking, ifup@, ConnMan, iwd and wicked services, so a failed
+firewall setup prevents their activation. The VPN boot unit also requires the guard.
+Initramfs networking and custom network setup services are outside this integration.
+
+The early helper does not need the user's home, DNS or a running VPN. Its fixed
+root-only `block` action installs the same IPv4/IPv6 output/forward drop policies
+without any guessed transport mark. Loopback, DHCP and IPv6 neighbor discovery
+remain allowed. The monitor closes inherited descriptors, including the early
+runner's lock, so the later connection runner can acquire its own boot lock.
+The normal boot runner waits for an uplink route and DNS configuration, verifies
+the early guard, then uses `protected_connect.py` with its scoped cgroup exception
+and private resolver. It never falls back to an unprotected CLI connection.
+Connection failure, unavailable home or missing DNS leave the block in place.
+After a successful connection, the verified mark replaces the temporary rules.
+Disabling strict mode removes only its unit/drop-ins/enablement links; the running
+VPN and firewall remain unchanged. Failed configuration updates restore the
+previous profile, helper copies, units, drop-ins and guard enablement.
+
 The user-level XDG autostart entry opens the UI after desktop login; it does not
 connect or retrigger the service. The entry is staged before authorization, so
 cancellation does not activate it. The UI reads the root-owned profile, service
@@ -335,8 +390,8 @@ Moving the checkout and rerunning the installer updates the desktop autostart pa
 Updating startup's root-owned helper copies requires saving startup settings again.
 
 Before-login connection requires the account file to be accessible during boot.
-Startup does not block all early boot traffic and is not an automatic reconnect
-daemon. The interface cannot record a before-VPN public address if boot connection
+Without the strict option, startup applies protection only after connecting.
+Neither mode is an automatic reconnect daemon. The interface cannot record a before-VPN public address if boot connection
 has already completed before it opens.
 
 ## CLI setup
@@ -411,6 +466,9 @@ and its active IPv4 route. No connection/disconnection was performed for that ch
   entry staging/cancellation/relocation and a simulated boot runner with the real
   CLI adapter: correct account, offline startup, missing account file, existing VPN,
   route verification, connection failure and post-connect firewall checks.
+  Strict-mode checks cover old-profile defaults, WireGuard-only validation, early
+  guard failure, isolated connection without fallback, missing home/network/DNS,
+  installation/removal of network dependencies and rollback in both directions.
 - GTK tests run on a separate Broadway display with the demo backend: location
   selection, favorites, search, protocol/transport, city/server, streaming,
   Connect/Disconnect, authorization failure, stale async callbacks and controls
@@ -436,6 +494,12 @@ and its active IPv4 route. No connection/disconnection was performed for that ch
   existing direct sockets, marked versus unmarked UDP, loopback, forwarded traffic,
   tunnel removal, modified-rule detection and preservation of another firewall
   table. The actual host firewall and active VPN were not changed.
+- Early-boot kernel checks activate the guard before creating any WireGuard
+  interface, verify DHCP and the blocking of direct/marked traffic, and ensure
+  the firewall monitor releases inherited boot locks. The DNS namespace fixture
+  runs real wg-quick behind this block and observes kernel WireGuard transport
+  beyond the drop chain before the fixture CLI exits; ordinary IPv4/IPv6 remains
+  blocked and temporary transport rules are removed afterward.
 - The README screenshots and five-scene [visual tour](Visual_Tour.md) are
   rendered from actual GTK widgets using in-memory demo data. Setup uses
   simulated missing-installation state. The capture script waits for stable

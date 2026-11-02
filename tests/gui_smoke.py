@@ -106,6 +106,7 @@ try:
     assert not window.startup_state.enabled
     assert not window.startup_toggle.get_sensitive()
     assert window.before_ip_label.get_text() == "203.0.113.42"
+    assert window.connect_button.get_label() == "Connect"
     window._show_setup()
     assert window.setup_dialog is None, "Demo mode must not open real CLI installation"
 
@@ -119,6 +120,7 @@ try:
     assert window.startup_toggle.get_sensitive()
     window._apply_startup(StartupState(available=False, detail="Boot connection needs systemd"))
     assert not window.startup_toggle.get_sensitive() and not window.startup_guard.get_sensitive()
+    assert not window.startup_block.get_sensitive()
     assert window.connect_button.get_sensitive(), "Manual VPN connections must work without systemd"
     window._apply_startup(StartupState())
     window.startup_guard.set_active(True)
@@ -127,6 +129,12 @@ try:
     assert not window.client.connected, "Saving startup must not connect now"
     assert window.startup_state.vpn_only
     assert window.startup_state.selection.country == "DE"
+    assert not window.startup_state.block_until_connected
+    window.startup_block.set_active(True)
+    assert window.startup_guard.get_active() and not window.startup_guard.get_sensitive()
+    window.startup_save.emit("clicked")
+    until(lambda: window.startup_state.block_until_connected and not window.control_busy)
+    assert not window.client.connected, "Early protection is saved for the next boot"
     startup_screenshot = os.environ.get("CYBERGHOST_STARTUP_SCREENSHOT")
     if startup_screenshot:
         window.startup_expander.set_expanded(True)
@@ -135,9 +143,11 @@ try:
         window.startup_expander.set_expanded(False)
         window.resize(1080, 780)
     window.protocol.set_active_id("openvpn")
+    assert not window.startup_block.get_sensitive()
     window.startup_save.emit("clicked")
     until(lambda: window.startup_state.selection.protocol == "openvpn" and not window.control_busy)
     assert not window.startup_state.vpn_only
+    assert not window.startup_state.block_until_connected
     window.startup_toggle.set_active(False)
     until(lambda: not window.startup_state.enabled and not window.control_busy)
     assert not window.client.connected
@@ -411,6 +421,30 @@ try:
     pump()
     assert window.state.state == "connected", "IP lookup failure is not a VPN disconnection"
     assert window.current_ip is None
+    # A boot service can start independently while an IP lookup is pending.
+    # Its late reply cannot become a before-VPN address during that change.
+    window._apply_status(Status("disconnected", "No VPN connections found."))
+    boot_old_ip = controlled.tasks[-1][1]
+    boot_target = window._selection()
+    window._apply_startup(StartupState(True, selection=boot_target, running=True, detail="Connecting…"))
+    boot_old_ip.set_result(PublicIP("203.0.113.77"))
+    pump()
+    assert window.before_ip is None and window.current_ip is None
+    window._apply_startup(StartupState(True, selection=boot_target, detail="Startup VPN connected.", boot_selection=boot_target))
+    assert window._active_selection is None, "Boot metadata must wait for live connection verification"
+    controlled.tasks[-1][1].set_result(Status("connected", "VPN connection found."))
+    pump()
+    controlled.tasks[-1][1].set_result(PublicIP("198.51.100.10", "DE"))
+    pump()
+    assert window.before_ip is None and window.before_ip_label.get_text() == "No baseline recorded"
+    assert window.current_ip.address == "198.51.100.10"
+    assert window._active_selection == boot_target and not window.connect_button.get_sensitive()
+    assert window.connect_button.get_label() == "Reconnect"
+    window.protocol.set_active_id("openvpn")
+    assert window.connect_button.get_sensitive(), "A protocol change should enable reconnection after boot"
+    window.protocol.set_active_id(boot_target.protocol)
+    assert not window.connect_button.get_sensitive(), "Returning to the boot selection should disable reconnection"
+    window._apply_startup(StartupState())
     window.client.demo = True
     # A denied firewall request leaves the verified switch state intact.
     window.guard_toggle.set_active(True)

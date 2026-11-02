@@ -25,6 +25,8 @@ class StartupState:
     detail: str = "Off · choose a location, then enable connection during boot."
     available: bool = True
     detail_message: Message | None = None
+    boot_selection: Selection | None = None
+    block_until_connected: bool = False
 
 
 def desktop_arg(value):
@@ -123,9 +125,15 @@ class StartupManager:
             detail = "Boot VPN is enabled, but desktop startup is missing. Save settings to restore it."
             display = msg(detail)
         status_file = self.paths.runtime / "status.json"
+        boot_selection = None
         if status_file.is_file() and status_file.stat().st_size < 16384:
             try:
                 status = json.loads(status_file.read_text())
+                # This /run report belongs to the current boot. A profile saved
+                # afterward describes the next boot, not the current selection.
+                if (not running and status.get("state") == "connected"
+                        and self.paths.profile.stat().st_mtime_ns <= status_file.stat().st_mtime_ns):
+                    boot_selection = selection
                 if isinstance(status.get("detail"), str):
                     detail = ("" if running else "Last boot: ") + status["detail"][:400] + "\nSaved: " + target
                     display = msg("{detail}\nSaved: {target}" if running else "Last boot: {detail}\nSaved: {target}",
@@ -138,7 +146,9 @@ class StartupManager:
         elif fields.get("ActiveState") == "failed":
             detail = "The boot VPN service failed. Connect manually and check its system journal.\nSaved: " + target
             display = msg("The boot VPN service failed. Connect manually and check its system journal.\nSaved: {target}", target=target)
-        return StartupState(True, selection, bool(profile["vpn_only"]), running, detail, detail_message=display)
+        return StartupState(True, selection, bool(profile["vpn_only"]), running, detail,
+                            detail_message=display, boot_selection=boot_selection,
+                            block_until_connected=bool(profile.get("block_until_connected", False)))
 
     def _authorize(self, action, payload=None):
         pkexec = shutil.which("pkexec", path=SYSTEM_PATH)
@@ -159,17 +169,19 @@ class StartupManager:
             raise CliError(data.get("error", "Could not update startup."))
         return data
 
-    def configure(self, selection, vpn_only):
+    def configure(self, selection, vpn_only, block_until_connected=False):
         if not systemd_available():
             raise CliError("Boot connection requires a running systemd system. Use the manual VPN controls on this system.")
         selection.connect_args()
+        vpn_only = vpn_only or block_until_connected
         if vpn_only and selection.protocol != "wireguard":
             raise CliError("VPN only at boot requires WireGuard.")
         # Prepare the per-user entry first, without activating it. Cancelling
         # authorization leaves the existing entry and service unchanged.
         temporary = self.autostart.stage()
         try:
-            self._authorize("configure", {"selection": asdict(selection), "vpn_only": vpn_only})
+            self._authorize("configure", {"selection": asdict(selection), "vpn_only": vpn_only,
+                                          "block_until_connected": block_until_connected})
             self.autostart.commit(temporary)
         finally:
             temporary.unlink(missing_ok=True)
@@ -192,10 +204,11 @@ class DemoStartup:
     def inspect(self):
         return self.state
 
-    def configure(self, selection, vpn_only):
+    def configure(self, selection, vpn_only, block_until_connected=False):
         selection.connect_args()
-        self.state = StartupState(True, selection, vpn_only, False, "Demo · saved startup location: " + selection.country,
-                                  detail_message=msg("Demo · saved startup location: {country}", country=selection.country))
+        self.state = StartupState(True, selection, vpn_only or block_until_connected, False, "Demo · saved startup location: " + selection.country,
+                                  detail_message=msg("Demo · saved startup location: {country}", country=selection.country),
+                                  block_until_connected=block_until_connected)
         return self.state
 
     def disable(self):

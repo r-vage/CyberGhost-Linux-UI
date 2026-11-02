@@ -60,7 +60,7 @@ def inner(original_mount, original_network):
         config_text = (f'[Interface]\nAddress = 10.22.0.1/32\nPrivateKey = {key}\n'
                        'PostUp = resolvectl dns %i 192.0.2.53; resolvectl domain %i ~.; resolvectl default-route %i true\n'
                        'PostDown = resolvectl revert %i\n'
-                       f'[Peer]\nPublicKey = {public}\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.18.0.2:51820\n')
+                       f'[Peer]\nPublicKey = {public}\nAllowedIPs = 0.0.0.0/0\nEndpoint = 198.18.0.2:51820\nPersistentKeepalive = 1\n')
         config_path = wgdir / 'cyberghost.conf'
         config_path.write_text(config_text)
         config_path.chmod(0o600)
@@ -91,7 +91,7 @@ with open({str(record)!r}, 'a') as stream:
         if Path(resolver).resolve().name == 'resolvectl':
             aliases.append(shutil.which('resolvectl'))
         fake_cli.write_text('#!/usr/bin/python3\n' + f'''
-import os, pathlib, subprocess
+import errno, json, os, pathlib, socket, subprocess, time
 assert os.readlink('/proc/self/ns/mnt') != {parent_ns!r}
 assert pathlib.Path('/etc/resolv.conf').read_text() == {private_dns!r}
 assert [line for line in pathlib.Path('/etc/nsswitch.conf').read_text().splitlines() if line.startswith('hosts:')] == ['hosts: files dns']
@@ -100,14 +100,48 @@ for command in {aliases!r}:
     subprocess.run([command, 'fixture-only'], check=True)
 result = subprocess.run(['wg-quick', 'up', 'cyberghost'], capture_output=True, text=True)
 assert result.returncode == 0, result.stderr
-print('Private DNS, host DNS update and isolated WireGuard startup checks passed.')
+deadline = time.monotonic() + 20
+while True:
+    data = json.loads(subprocess.check_output(['nft', '-j', 'list', 'counter', 'inet', 'boot_probe', 'transport'], text=True))
+    if any(item.get('counter', {{}}).get('packets', 0) for item in data['nftables']):
+        break
+    assert time.monotonic() < deadline, 'Early block prevented encrypted WireGuard transport'
+    time.sleep(.1)
+for family, destination in [(socket.AF_INET, '198.18.0.3'), (socket.AF_INET6, 'fd18::2')]:
+    with socket.socket(family, socket.SOCK_DGRAM) as connection:
+        try:
+            connection.sendto(b'ordinary traffic', (destination, 9999))
+        except OSError as error:
+            assert error.errno in (errno.EPERM, errno.EACCES), error
+        else:
+            raise AssertionError('Ordinary traffic escaped during VPN setup')
+print('Private DNS, host DNS update and encrypted WireGuard transport under the early boot block passed.')
 ''')
         fake_cli.chmod(0o700)
         config = {'group': group.name, 'parent': os.getpid(), 'binary': str(fake_cli), 'args': [],
                   'username': 'test-user', 'home': str(root)}
         (job / 'job.json').write_text(json.dumps(config))
-        subprocess.run(['unshare', '--mount', '--propagation', 'private', '--', '/usr/bin/python3', __file__,
-                        '--worker', str(job), str(groups)], check=True)
+        for name in ('all', 'default', 'plain0'):
+            Path(f'/proc/sys/net/ipv6/conf/{name}/disable_ipv6').write_text('0')
+        subprocess.run(['ip', '-6', 'addr', 'add', 'fd18::1/64', 'dev', 'plain0', 'nodad'], check=True)
+        # No cgroup exception or guessed mark is needed for this inert CLI: it
+        # only changes the isolated interface. Observe the *kernel's* encrypted
+        # outer packets after our drop chain, while the parent tracks its mark.
+        guard = reconnect.firewall.Firewall()
+        guard.enable(None)
+        guard.command('nft', '--file', '-', source='''table inet boot_probe {
+ counter transport { }
+ chain output { type filter hook output priority 30; policy accept;
+  oifname "plain0" udp dport 51820 counter name transport;
+ }
+}
+''')
+        result = reconnect.run_connection(['unshare', '--mount', '--propagation', 'private', '--', '/usr/bin/python3', __file__,
+                                           '--worker', str(job), str(groups)], guard, 'test-boot-transport')
+        assert result.returncode == 0, result.stderr
+        print(result.stdout.strip())
+        reconnect.remove_exception(guard, 'test-boot-transport')
+        assert guard.status().state == 'on', 'Temporary transport rules were not cleaned up'
         assert Path('/etc/resolv.conf').read_text() == 'nameserver 127.0.0.53\n'
         assert Path('/etc/nsswitch.conf').read_text() == original_nss
         updates = [json.loads(line) for line in record.read_text().splitlines()]

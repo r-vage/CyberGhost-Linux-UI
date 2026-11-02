@@ -300,7 +300,8 @@ und standardmäßig aus. DNS- und Kontokonfiguration bleiben Aufgabe der offizie
 
 1. Wähle Standort, Protokoll und gegebenenfalls Stadt und Server.
 2. Klappe **Systemstart** unter den Verbindungseinstellungen auf.
-3. Aktiviere optional **Nach dem Verbinden „Nur VPN“ aktivieren (WireGuard)**.
+3. Aktiviere optional **Nach dem Verbinden „Nur VPN“ aktivieren (WireGuard)** oder
+   **Internet bis zur VPN-Verbindung sperren (WireGuard)** für Schutz vor dem Netzwerkstart.
 4. Aktiviere **VPN beim Systemstart verbinden** und bestätige die Linux-Autorisierung.
 
 Die Einrichtung speichert diese Verbindung in einem geschützten Systemprofil und
@@ -328,8 +329,23 @@ oder erst bei der Anmeldung eingehängtes Home-Verzeichnis kann den Zugriff auf 
 Kontodatei vor der Anmeldung verhindern. Verbinde in diesem Fall nach der Anmeldung
 manuell.
 
-Früher Datenverkehr beim Systemstart kann das normale Netzwerk nutzen, bis das VPN
-verbunden ist. Der Startschutz wird **erst nach bestätigter Verbindung** aktiviert.
+**Internet bis zur VPN-Verbindung sperren (WireGuard)** aktiviert eine Firewall vor
+dem Start der Netzwerkverwaltung. Normaler Internet- und LAN-Verkehr bleibt gesperrt.
+DHCP, IPv6-Netzwerkverwaltung und die isolierte CyberGhost-Einrichtung bleiben erlaubt.
+Nur der Verbindungsprozess erhält direkten DNS-/API-Zugriff; der geprüfte verschlüsselte
+WireGuard-Transport wird freigegeben, sobald der Tunnel bereit ist. Der Schutz bleibt
+bei Verbindungsfehlern und nach erfolgreicher Verbindung aktiv. Wähle die Option und
+speichere die Starteinstellungen, damit sie beim nächsten Systemstart gilt.
+Benötigt werden cgroup v2 sowie `unshare`, `mount` und `nsenter` aus util-linux.
+
+Die frühe Sperre unterstützt NetworkManager, systemd-networkd, ifupdown, ConnMan,
+iwd und wicked unter systemd. Ihre Dienste starten nur nach erfolgreicher Firewall-Einrichtung.
+Netzwerkverbindungen aus der initramfs oder eigenen Startdiensten sind nicht abgedeckt.
+Abwählen und Speichern entfernt die Startabhängigkeiten; den laufenden Schutz kannst
+du über **Nur VPN** im Hauptbereich ausschalten.
+
+Ist nur **Nach dem Verbinden „Nur VPN“ aktivieren** ausgewählt, kann früher
+Datenverkehr das normale Netzwerk nutzen, bis die VPN-Verbindung bestätigt ist.
 Verbindet sich das VPN vor dem App-Start, bleibt die vorherige IP-Adresse unbekannt.
 Der Dienst verwendet Hilfsprogrammkopien im Besitz von root, das bestehende
 CyberGhost-Konto und keine neu gespeicherten Passwörter. Weitere Details zeigt:
@@ -377,8 +393,9 @@ Nachbarschaftserkennung bleiben erlaubt. Privilegierte Anwendungen und separate
 Netzwerk-Namespaces mit eigenen Schnittstellen werden damit nicht kontrolliert.
 
 Der Schutz **bleibt nach Trennen oder Beenden aktiv**, bis du ihn ausschaltest
-oder neu startest. Die optionale Starteinstellung kann ihn nach der nächsten
-Startverbindung erneut aktivieren. Lasse ihn beim Serverwechsel eingeschaltet:
+oder neu startest. Die Starteinstellungen können ihn nach dem Verbinden oder mit
+**Internet bis zur VPN-Verbindung sperren** bereits vor dem Netzwerkstart aktivieren.
+Lasse ihn beim Serverwechsel eingeschaltet:
 **Verbinden** stellt die nächste WireGuard-Verbindung her, während normaler
 Verkehr blockiert bleibt. Es genügt eine Autorisierung. Eine vorübergehende
 Ausnahme gilt ausschließlich für den CyberGhost-Verbindungsprozess und wird bei
@@ -389,8 +406,8 @@ aus util-linux sowie konfigurierte DNS-Server der zugrunde liegenden
 Netzwerkverbindung. Schlägt die Einrichtung fehl, bleibt der Schutz aktiv.
 Gespeicherte Standorte und bereits geladene Server sind offline verfügbar.
 Für neue Ziele kannst du die automatische Auswahl nutzen und nach dem Verbinden
-aktualisieren. Diese Funktion ist keine Firewall für die frühe Startphase und
-keine automatische Wiederverbindung.
+aktualisieren. Für Schutz beim Systemstart gibt es die separate Startoption.
+Eine automatische Wiederverbindung erfolgt nicht.
 
 Ein autorisierter Helfer prüft die tatsächlichen Firewall-Regeln, damit
 Statusaktualisierungen keine wiederholten Passwortabfragen benötigen. Kann die

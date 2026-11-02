@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from cyberghost_desktop import protected_connect as reconnect
 from cyberghost_desktop.cli import CliError, CyberGhostClient, Selection
@@ -136,7 +136,7 @@ class ReconnectTests(unittest.TestCase):
                       patch.object(reconnect.firewall, 'authorized_action', return_value=GuardStatus('on', 'Verified'),
                                    side_effect=RuntimeError('Monitor verification failed') if failure == 'monitor' else None) as enable,
                       patch.object(reconnect, 'connection_group', group),
-                      patch.object(reconnect.subprocess, 'run', return_value=result,
+                      patch.object(reconnect, 'run_connection', return_value=result,
                                    side_effect=OSError('launch failed') if failure == 'exception' else None)):
                     account = SimpleNamespace(pw_name='desktop-user', pw_dir='/home/desktop-user')
                     if failure == 'success':
@@ -175,7 +175,7 @@ class ReconnectTests(unittest.TestCase):
                         raise CliError('Cannot disconnect')
                     return 'Disconnected'
 
-                def launch(command, **_kwargs):
+                def launch(command, *_args):
                     events.append('connect')
                     self.assertEqual(events, ['disconnect', 'connect'])
                     self.assertEqual((Path(command[-1]) / 'resolv.conf').read_text(), 'nameserver 192.0.2.53\n')
@@ -194,7 +194,7 @@ class ReconnectTests(unittest.TestCase):
                       patch.object(reconnect, 'connection_group', group),
                       patch.object(reconnect, 'disconnect_existing', side_effect=disconnect),
                       patch.object(reconnect, 'remove_exception') as cleanup,
-                      patch.object(reconnect.subprocess, 'run', side_effect=launch) as run):
+                      patch.object(reconnect, 'run_connection', side_effect=launch) as run):
                     if failure:
                         with self.assertRaisesRegex(CliError, 'Cannot disconnect'):
                             reconnect.protected_connect(Selection(country='DE'), account, runtime=runtime, replace_existing=True)
@@ -215,11 +215,42 @@ class ReconnectTests(unittest.TestCase):
                   patch.object(reconnect.firewall, 'secure_runtime'),
                   patch.object(reconnect.firewall, 'request', return_value=GuardStatus('unknown', 'Cannot verify')),
                   patch.object(reconnect, 'connection_group') as group,
-                  patch.object(reconnect.subprocess, 'run') as run,
+                  patch.object(reconnect, 'run_connection') as run,
                   self.assertRaisesRegex(RuntimeError, 'could not be verified')):
                 reconnect.protected_connect(Selection(country='DE'), SimpleNamespace(), runtime=Path(directory))
             group.assert_not_called()
             run.assert_not_called()
+
+    def test_new_wireguard_transport_is_allowed_before_cli_finishes(self):
+        process = MagicMock()
+        process.__enter__.return_value = process
+        process.returncode = 0
+        process.communicate.side_effect = [subprocess.TimeoutExpired('cli', .25)] * 4 + [('Connected', '')]
+        guard = Mock()
+        # No guessed/default mark: the routed interface must exist first.
+        guard.wireguard_mark.side_effect = [RuntimeError('No route'), 51821, 51821, 51822]
+        with patch.object(reconnect.subprocess, 'Popen', return_value=process):
+            result = reconnect.run_connection(['/trusted/cli'], guard, 'test-group')
+        self.assertEqual(result.stdout, 'Connected')
+        sources = [call.kwargs['source'] for call in guard.command.call_args_list]
+        self.assertEqual(len(sources), 2)
+        for mark, source in zip((51821, 51822), sources):
+            self.assertIn(f'meta l4proto udp meta mark {mark} accept comment "test-group"', source)
+            self.assertNotIn('delete', source)
+            self.assertNotIn('policy accept', source)
+        process.kill.assert_not_called()
+
+    def test_transport_rule_failure_stops_cli_and_preserves_error(self):
+        process = MagicMock()
+        process.__enter__.return_value = process
+        process.communicate.side_effect = [subprocess.TimeoutExpired('cli', .25), ('', '')]
+        guard = Mock()
+        guard.wireguard_mark.return_value = 51820
+        guard.command.side_effect = RuntimeError('nft failed')
+        with patch.object(reconnect.subprocess, 'Popen', return_value=process), self.assertRaisesRegex(RuntimeError, 'nft failed'):
+            reconnect.run_connection(['/trusted/cli'], guard, 'test-group')
+        process.kill.assert_called_once()
+        guard.disable.assert_not_called()
 
 
 if __name__ == '__main__':

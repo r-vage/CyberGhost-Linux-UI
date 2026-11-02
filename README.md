@@ -300,7 +300,8 @@ by default. DNS and account configuration remain with the official CLI.
 
 1. Choose the location, protocol and optional city/server you want at startup.
 2. Expand **Startup** beneath the connection settings.
-3. Optionally select **Enable VPN only after connecting (WireGuard)**.
+3. Optionally select **Enable VPN only after connecting (WireGuard)**, or
+   **Block internet until VPN connects (WireGuard)** for protection before networking starts.
 4. Enable **Connect VPN during boot** and complete Linux's authorization dialog.
 
 Setup saves this specific connection in a protected system profile and enables
@@ -313,6 +314,8 @@ The location list waits while the boot connection is running. If DNS or the
 network is still becoming available, the app retries loading locations for up to
 three minutes instead of displaying a startup traceback. Connection status stays
 visible; persistent failures still show an error and can be retried with **Refresh**.
+Saved locations stay available while the live list refreshes, including when the
+VPN is connected with **VPN only** enabled but DNS or the catalog request fails.
 
 Changing the main location controls does not change the saved boot connection.
 Use **Save current location for startup** to apply a new location, protocol or
@@ -327,9 +330,24 @@ IPv4 route; the Startup section shows its last result. An encrypted or login-mou
 home directory can prevent access to CyberGhost's account file before login.
 In that case, connect manually after signing in.
 
-Early boot traffic may use the normal network until the VPN connects; startup
-VPN-only protection is applied **after** the connection is verified. If the VPN
-connects before the app opens, **Before VPN** stays unknown for that session.
+**Block internet until VPN connects (WireGuard)** installs an early firewall before
+the network managers start. Ordinary internet and LAN traffic stay blocked while
+CyberGhost connects; DHCP, IPv6 network maintenance and the isolated CyberGhost
+setup process remain allowed. Only that process gets direct DNS/API access. The
+new WireGuard tunnel's verified encrypted transport is allowed as it becomes ready.
+Protection remains enabled after connecting and if setup fails. Existing startup
+profiles keep their previous behavior until you select this option and save.
+It requires cgroup v2 and `unshare`, `mount` and `nsenter` from util-linux.
+
+The early block covers normal systemd startup with NetworkManager, systemd-networkd,
+ifupdown, ConnMan, iwd and wicked. Their services require successful firewall setup.
+Networking configured earlier by the initramfs or custom services is outside this
+option's scope. Disabling the option and saving removes its boot dependencies;
+use the main **VPN only** control to turn off protection in the current session.
+
+With only **Enable VPN only after connecting** selected, early traffic can use the
+normal network until the connection is verified. If the VPN connects before the
+app opens, **Before VPN** stays unknown for that session.
 
 The boot service runs root-owned copies of the startup helpers, not Python code
 from a user-writable checkout. It uses the existing CyberGhost account and stores
@@ -375,8 +393,9 @@ remain allowed. It does not control privileged applications or separate network
 namespaces that manage their own network interfaces.
 
 Protection **stays enabled after Disconnect or Quit**, until you turn it off or
-reboot. The optional startup setting can enable it again after the next boot's
-VPN connection. Leave it checked when changing servers: **Connect** establishes the
+reboot. Startup can reapply it after connecting or, with **Block internet until VPN
+connects**, before networking starts. Leave it checked when changing servers: **Connect**, or **Reconnect**
+when already connected, establishes the
 next WireGuard connection while keeping ordinary traffic blocked. Linux authorizes
 the connection once; there is no separate protection toggle. A temporary exception
 is restricted to CyberGhost's connection process and is removed after success or
@@ -384,7 +403,8 @@ failure. Protected reconnects require cgroup v2 and the `unshare`, `mount` and
 `nsenter` tools from util-linux, plus configured uplink DNS servers. If setup fails,
 protection stays enabled. Saved locations and previously loaded servers remain
 available offline; use Automatic for a new choice, then Refresh after connecting.
-It is not a boot-time firewall or an automatic reconnect feature.
+For protection during boot, select the separate Startup option. This is not an
+automatic reconnect feature.
 
 A small authorized helper checks the actual firewall rules so status refreshes
 do not need repeated password prompts. If it cannot verify the rules, the app

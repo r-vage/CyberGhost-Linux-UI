@@ -16,9 +16,10 @@ from cyberghost_desktop.startup import Autostart, DemoStartup, StartupManager, S
 SOURCE = Path(system.__file__).parent
 
 
-def profile(selection=None, vpn_only=False):
+def profile(selection=None, vpn_only=False, block_until_connected=False):
     return {"managed_by": system.MARKER, "uid": 12345, "username": "desktop-test", "binary": "/trusted/cyberghostvpn",
-            "selection": asdict(selection or Selection(country="DE")), "vpn_only": vpn_only}
+            "selection": asdict(selection or Selection(country="DE")), "vpn_only": vpn_only,
+            "block_until_connected": block_until_connected}
 
 
 class StartupDesktopTests(unittest.TestCase):
@@ -77,6 +78,30 @@ class StartupDesktopTests(unittest.TestCase):
             self.assertNotIn("shell", options)
             self.assertNotIn("timeout", options)
 
+    def test_strict_boot_implies_protection_and_requires_wireguard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, manager = self.fixtures(directory)
+            with patch.object(manager, "_authorize") as authorize, patch.object(manager, "inspect", return_value=StartupState(True)):
+                manager.configure(Selection(country="DE"), False, True)
+            self.assertTrue(authorize.call_args.args[1]["vpn_only"])
+            self.assertTrue(authorize.call_args.args[1]["block_until_connected"])
+            with patch.object(manager, "_authorize") as authorize, self.assertRaisesRegex(CliError, "WireGuard"):
+                manager.configure(Selection(country="DE", protocol="openvpn"), False, True)
+            authorize.assert_not_called()
+
+    def test_legacy_profile_does_not_enable_strict_boot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Mock(return_value=subprocess.CompletedProcess([], 0, 'MainPID=0\nJob=0\nActiveState=active\nUnitFileState=enabled\n', ''))
+            _, manager = self.fixtures(directory, run)
+            data = profile(vpn_only=True)
+            del data['block_until_connected']
+            manager.paths.profile.parent.mkdir(parents=True)
+            manager.paths.profile.write_text(json.dumps(data))
+            with patch.object(system, 'trusted', side_effect=lambda path: path):
+                state = manager.inspect()
+            self.assertTrue(state.vpn_only)
+            self.assertFalse(state.block_until_connected)
+
     def test_success_commits_autostart_and_disable_removes_only_owned_entry(self):
         with tempfile.TemporaryDirectory() as directory:
             entry, manager = self.fixtures(directory)
@@ -133,6 +158,32 @@ class StartupDesktopTests(unittest.TestCase):
             self.assertFalse(manager.inspect().enabled)
             self.assertTrue(manager.configure(Selection(country="DE"), True).enabled)
             self.assertFalse(manager.disable().enabled)
+
+    def test_boot_selection_requires_a_completed_boot_and_unchanged_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Mock(return_value=subprocess.CompletedProcess([], 0,
+                       "MainPID=0\nJob=\nActiveState=active\nUnitFileState=enabled\n", ""))
+            entry, manager = self.fixtures(directory, run)
+            entry.commit(entry.stage())
+            manager.paths.profile.parent.mkdir(parents=True)
+            manager.paths.profile.write_text("placeholder")
+            os.utime(manager.paths.profile, ns=(1000, 1000))
+            manager.paths.runtime.mkdir(parents=True)
+            report = manager.paths.runtime / "status.json"
+            with patch("cyberghost_desktop.startup.read_profile", return_value=profile()):
+                self.assertIsNone(manager.inspect().boot_selection)
+                for state in ("connecting", "failed", "connected"):
+                    report.write_text(json.dumps({"state": state, "detail": "Boot outcome"}))
+                    os.utime(report, ns=(2000, 2000))
+                    expected = Selection(country="DE") if state == "connected" else None
+                    self.assertEqual(manager.inspect().boot_selection, expected)
+                # A still-running service cannot establish the comparison yet.
+                run.return_value.stdout = "MainPID=42\nJob=\nActiveState=active\nUnitFileState=enabled\n"
+                self.assertIsNone(manager.inspect().boot_selection)
+                run.return_value.stdout = "MainPID=0\nJob=\nActiveState=active\nUnitFileState=enabled\n"
+                # Saving a different destination prepares the next boot only.
+                os.utime(manager.paths.profile, ns=(3000, 3000))
+                self.assertIsNone(manager.inspect().boot_selection)
 
     def test_openvpn_cannot_enable_wireguard_guard(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -200,6 +251,63 @@ class StartupInstallTests(unittest.TestCase):
                     system.install_profile(account, {}, paths=paths, source=SOURCE, control=fail)
                 self.assertEqual(paths.profile.read_bytes(), before)
 
+    def test_strict_boot_install_downgrade_and_removal_leave_live_services_alone(self):
+        for remove in (False, True):
+            with self.subTest(remove=remove), tempfile.TemporaryDirectory() as directory:
+                paths = system.Paths(12345, Path(directory))
+                account = SimpleNamespace(pw_uid=12345)
+                control = Mock(return_value='0')
+                with (patch.object(system, 'profile_for', return_value=profile(vpn_only=True, block_until_connected=True)),
+                      patch.object(system, 'trusted', side_effect=lambda path: path.resolve())):
+                    system.install_profile(account, {}, paths=paths, source=SOURCE, control=control)
+                    self.assertIn('Type=oneshot', paths.guard_unit.read_text())
+                    self.assertIn('DefaultDependencies=no', paths.guard_unit.read_text())
+                    self.assertIn('Before=network-pre.target shutdown.target', paths.guard_unit.read_text())
+                    self.assertIn('Requires=' + paths.guard_name, paths.unit.read_text())
+                    for item in paths.network_dropins:
+                        self.assertIn('Requires=' + paths.guard_name, item.read_text())
+                        self.assertIn('After=' + paths.guard_name, item.read_text())
+                    self.assertTrue(any(call.args == ('enable', paths.guard_name) for call in control.call_args_list))
+                    if remove:
+                        system.remove_profile(paths, control=control)
+                    else:
+                        with patch.object(system, 'profile_for', return_value=profile()):
+                            system.install_profile(account, {}, paths=paths, source=SOURCE, control=control)
+                        self.assertNotIn(paths.guard_name, paths.unit.read_text())
+                self.assertFalse(paths.guard_unit.exists())
+                self.assertFalse(any(path.exists() for path in paths.network_dropins))
+                self.assertTrue(any(call.args == ('disable', paths.guard_name) for call in control.call_args_list))
+                self.assertTrue(all(not {'--now', 'start', 'stop', 'restart'} & set(call.args) for call in control.call_args_list))
+
+    def test_failed_strict_change_restores_units_dropins_and_enablement(self):
+        for was_strict in (False, True):
+            with self.subTest(was_strict=was_strict), tempfile.TemporaryDirectory() as directory:
+                paths = system.Paths(12345, Path(directory))
+                account = SimpleNamespace(pw_uid=12345)
+                enabled = set()
+                fail = False
+
+                def control(*args):
+                    if args[0] == 'enable':
+                        if fail and args[1] == paths.name:
+                            raise RuntimeError('failed enable')
+                        enabled.add(args[1])
+                    elif args[0] == 'disable':
+                        enabled.discard(args[1])
+                    return '0'
+
+                with (patch.object(system, 'profile_for', return_value=profile(block_until_connected=was_strict)),
+                      patch.object(system, 'trusted', side_effect=lambda path: path.resolve())):
+                    system.install_profile(account, {}, paths=paths, source=SOURCE, control=control)
+                    tracked = [paths.profile, paths.unit, paths.guard_unit, *paths.network_dropins]
+                    before = {p: p.read_bytes() if p.exists() else None for p in tracked}
+                    previous_enabled = enabled.copy()
+                    fail = True
+                    with patch.object(system, 'profile_for', return_value=profile(block_until_connected=not was_strict)), self.assertRaisesRegex(RuntimeError, 'failed enable'):
+                        system.install_profile(account, {}, paths=paths, source=SOURCE, control=control)
+                    self.assertEqual(enabled, previous_enabled)
+                    self.assertEqual({p: p.read_bytes() if p.exists() else None for p in tracked}, before)
+
     def test_refuses_foreign_files_and_running_job(self):
         with tempfile.TemporaryDirectory() as directory:
             paths = system.Paths(12345, Path(directory))
@@ -224,6 +332,8 @@ class StartupInstallTests(unittest.TestCase):
         for payload in [{"selection": {}, "vpn_only": False, "command": "anything"},
                         {"selection": asdict(Selection(country="DE", city="--stop")), "vpn_only": False},
                         {"selection": asdict(Selection(country="DE\n--stop")), "vpn_only": False},
+                        {"selection": asdict(Selection(country="DE")), "vpn_only": False, "block_until_connected": "yes"},
+                        {"selection": asdict(Selection(country="DE", protocol="openvpn")), "vpn_only": False, "block_until_connected": True},
                         {"selection": asdict(Selection(country="DE", protocol="openvpn")), "vpn_only": True}]:
             with self.subTest(payload=payload), self.assertRaises((ValueError, TypeError)):
                 system.profile_for(account, payload, SOURCE)
@@ -231,11 +341,27 @@ class StartupInstallTests(unittest.TestCase):
 
 class BootRunnerTests(unittest.TestCase):
     def boot(self, *, initially=False, vpn_only=False, status_unknown=False, route_wrong=False, guard_present=False,
-             offline=False, file_available=True, connect_exit=0, verify_guard=True):
-        data = profile(vpn_only=vpn_only)
+             offline=False, file_available=True, connect_exit=0, verify_guard=True, strict=False, dns_available=True):
+        data = profile(vpn_only=vpn_only, block_until_connected=strict)
         connected = initially
         calls = []
         protected = Mock(return_value=firewall.GuardStatus("on" if verify_guard else "unknown", "checked"))
+
+        def connect(selection, account):
+            nonlocal connected
+            self.assertTrue(strict)
+            self.assertEqual(selection.country, 'DE')
+            self.assertEqual(account.pw_name, 'desktop-test')
+            calls.append((['protected-connect'], {}))
+            if connect_exit:
+                raise RuntimeError('CLI failed; protection remains enabled')
+            connected = True
+
+        adapters = {'cli': cli,
+                    'firewall': SimpleNamespace(Firewall=firewall.Firewall, authorized_action=protected,
+                                                request=Mock(return_value=protected.return_value)),
+                    'protected_connect': SimpleNamespace(direct_resolvers=Mock(side_effect=None if dns_available else RuntimeError('No DNS')),
+                                                          protected_connect=connect)}
 
         def run(command, **kwargs):
             nonlocal connected
@@ -265,14 +391,47 @@ class BootRunnerTests(unittest.TestCase):
             stack.enter_context(patch.object(system, "trusted", side_effect=lambda path: path))
             stack.enter_context(patch.object(Path, "is_file", return_value=file_available))
             stack.enter_context(patch.object(system.shutil, "which", side_effect=lambda name, **_: "/usr/sbin/" + name))
-            stack.enter_context(patch.object(system, "adapter", side_effect=lambda name, _directory:
-                cli if name == "cli" else SimpleNamespace(Firewall=firewall.Firewall, authorized_action=protected)))
+            stack.enter_context(patch.object(system, "adapter", side_effect=lambda name, _directory: adapters[name]))
             output = stack.enter_context(patch.object(system, "outcome"))
             try:
                 system.boot_connect(system.Paths(12345), run=run, sleep=lambda _: None, now=Mock(side_effect=[0, 181]))
             except RuntimeError as error:
                 errors.append(str(error))
         return calls, protected, output, errors
+
+    def test_early_protection_needs_neither_home_nor_network_nor_existing_vpn(self):
+        for verified in (True, False):
+            with self.subTest(verified=verified):
+                module = SimpleNamespace(authorized_action=Mock(return_value=firewall.GuardStatus('on' if verified else 'unknown', 'checked')))
+                with (patch.object(system, 'read_profile', return_value=profile(block_until_connected=True)),
+                      patch.object(system, 'trusted'), patch.object(system, 'adapter', return_value=module),
+                      patch.object(system, 'outcome') as output,
+                      patch.object(system.pwd, 'getpwuid', side_effect=AssertionError('Home/account must not be needed'))):
+                    if verified:
+                        system.boot_protect(system.Paths(12345))
+                        self.assertEqual(output.call_args.args[1], 'waiting')
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'Network startup is blocked'):
+                            system.boot_protect(system.Paths(12345))
+                        output.assert_not_called()
+                    module.authorized_action.assert_called_once_with('block')
+
+    def test_strict_boot_uses_isolated_connector_and_never_unprotected_cli(self):
+        calls, guard, output, errors = self.boot(strict=True, guard_present=True)
+        self.assertFalse(errors)
+        self.assertEqual(sum(command == ['protected-connect'] for command, _ in calls), 1)
+        self.assertFalse(any('--connect' in command for command, _ in calls))
+        guard.assert_called_once_with('enable')
+        self.assertEqual(output.call_args.args[1], 'connected')
+
+    def test_strict_failure_has_no_unprotected_fallback_or_disable(self):
+        for options in ({'connect_exit': 1}, {'offline': True}, {'file_available': False}, {'verify_guard': False}, {'dns_available': False}):
+            with self.subTest(options=options):
+                calls, guard, output, errors = self.boot(strict=True, guard_present=True, **options)
+                self.assertTrue(errors)
+                self.assertFalse(any('--connect' in command for command, _ in calls))
+                guard.assert_not_called()
+                self.assertTrue(all(call.args[1] != 'connected' for call in output.call_args_list))
 
     def test_connects_saved_profile_once_with_correct_account_then_enables_guard(self):
         calls, guard, output, errors = self.boot(vpn_only=True)

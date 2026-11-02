@@ -134,11 +134,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self.state = Status("unknown", "Checking CyberGhost…")
         self.locations = []
         self.location = None
+        self._locations_loading = False
         self._locations_retry = None
+        self._locations_epoch = 0
         self._epoch = 0
         self._requests = {}
         self._futures = {}
         self._cache = {}
+        self._city_refresh_deferred = False
         self._server_refresh_deferred = False
         self._rendering = False
         self._changing_choices = False
@@ -387,6 +390,10 @@ class MainWindow(Gtk.ApplicationWindow):
         self.startup_guard = self.ui(Gtk.CheckButton(), label="Enable VPN only after connecting (WireGuard)")
         self.ui.set(self.startup_guard, "tooltip-text", "Optional protection for the startup connection. Early boot traffic can use the normal network until the VPN connects.")
         startup_box.pack_start(self.startup_guard, False, False, 0)
+        self.startup_block = self.ui(Gtk.CheckButton(), label="Block internet until VPN connects (WireGuard)")
+        self.ui.set(self.startup_block, "tooltip-text", "Block ordinary internet and LAN traffic before networking starts. Only network maintenance and isolated VPN setup are allowed. Protection stays on if connecting fails and after the VPN connects. Applies on the next boot.")
+        self.startup_block.connect("toggled", self._startup_block_toggled)
+        startup_box.pack_start(self.startup_block, False, False, 0)
         self.startup_save = self.ui(Gtk.Button(), label="Save current location for startup")
         self.ui.set(self.startup_save, "tooltip-text", "Save the selected country/service, city, server and protocol. Changes require Linux authorization.")
         self.startup_save.connect("clicked", lambda *_: self._change_startup(True))
@@ -524,8 +531,10 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def refresh_locations(self):
         mode = self.mode.get_active_id()
+        self._locations_loading = True
         self._epoch += 1
-        epoch = self._epoch
+        self._locations_epoch += 1
+        epoch = self._locations_epoch
         if self._locations_retry is not None:
             GLib.source_remove(self._locations_retry)
             self._locations_retry = None
@@ -545,6 +554,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._sync_controls()
 
         if not self.client.binary:
+            self._locations_loading = False
             self.ui.set(self.empty_list, "label", "Open Setup to install the CyberGhost CLI.")
             self.ui.set(self.location_count, "label", "CLI setup required")
             return
@@ -553,28 +563,51 @@ class MainWindow(Gtk.ApplicationWindow):
         network_wait_logged = False
 
         def current():
-            return self.alive and epoch == self._epoch
+            return self.alive and epoch == self._locations_epoch
+
+        def refreshing_count():
+            self.ui.set(self.location_count, "label", msg("{count} saved locations · refreshing…", count=len(self.locations))
+                        if self.locations else "Waiting to load locations…")
 
         def wait(message):
             self.ui.set(self.empty_list, "label", message)
-            self.ui.set(self.location_count, "label", "Waiting to load locations…")
+            refreshing_count()
             self._locations_retry = GLib.timeout_add_seconds(3, attempt)
 
         def loaded(locations):
             if not current():
                 return
+            self._locations_loading = False
+            # Browsing a saved catalog must not cancel its refresh. Preserve
+            # the selected destination unless it disappeared from the API.
+            if self.location is not None:
+                updated = next((item for item in locations if item.key == self.location.key), None)
+                self.location = updated
+                if updated is None:
+                    self._epoch += 1
+                    self._reset_choices()
+                    self.ui.set(self.selected_title, "label", "Choose a location")
+                    self.ui.set(self.selected_title, "tooltip-text", None)
+                else:
+                    self.ui.set(self.selected_title, "label", updated.name)
+                    self.ui.set(self.selected_title, "tooltip-text", updated.name)
             self.locations = locations
             self.preferences.remember_locations(mode, locations)
             self._save()
             self._render_locations()
+            self._update_favorite()
+            self._sync_controls()
+            self._refresh_deferred_cities()
             self._append_log(msg("Loaded {count} {mode} locations.", count=len(locations), mode=mode))
 
         def use_offline_locations():
             cached = self.preferences.offline_locations(mode)
             if self.guard_state.state != "on" or self.state.state == "connected" or not cached:
                 return False
-            self.locations = cached
-            self._render_locations()
+            self._locations_loading = False
+            if not self.locations:
+                self.locations = cached
+                self._render_locations()
             self.ui.set(self.location_count, "label", msg("{count} saved locations · VPN only", count=len(cached)))
             self._append_log("Using saved locations while VPN only blocks direct traffic. Connect, then Refresh for the latest list.")
             return True
@@ -590,10 +623,16 @@ class MainWindow(Gtk.ApplicationWindow):
                 wait(message)
                 if not network_wait_logged:
                     self._append_log(message)
+                    self._append_log(str(error))
                     network_wait_logged = True
                 return
+            self._locations_loading = False
+            if self._city_refresh_deferred:
+                self._city_refresh_deferred = False
+                self.ui.set(self.location_hint, "label", "City list unavailable. You can still use automatic selection.")
             self.ui.set(self.empty_list, "label", "Locations unavailable. Use Refresh to try again.")
-            self.ui.set(self.location_count, "label", "Could not load locations")
+            self.ui.set(self.location_count, "label", msg("{count} saved locations · refresh failed", count=len(self.locations))
+                        if self.locations else "Could not load locations")
             self._show_error(error)
 
         def attempt():
@@ -610,12 +649,21 @@ class MainWindow(Gtk.ApplicationWindow):
             if self._guard_pending:
                 wait("Waiting for the firewall check…")
                 return False
+            # An active interface/route does not guarantee working DNS or API
+            # access. Keep cached locations usable while the live list loads.
+            if not self.locations:
+                self.locations = self.preferences.offline_locations(mode)
+                if self.locations:
+                    self._render_locations()
             if use_offline_locations():
                 return False
             if deadline is None:
                 deadline = time.monotonic() + 180
             self.ui.set(self.empty_list, "label", "Loading locations…")
-            self.ui.set(self.location_count, "label", "Contacting CyberGhost…")
+            if self.locations:
+                refreshing_count()
+            else:
+                self.ui.set(self.location_count, "label", "Contacting CyberGhost…")
             self._submit("locations", lambda: self.client.locations(mode), loaded, failed)
             return False
 
@@ -706,6 +754,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self._render_locations()
 
     def _reset_choices(self):
+        self._city_refresh_deferred = False
         self._server_refresh_deferred = False
         self.server.set_status()
         self._changing_choices = True
@@ -727,6 +776,7 @@ class MainWindow(Gtk.ApplicationWindow):
         epoch = self._epoch
         selection = self._selection()
         key = (selection.mode, selection.country)
+        self._city_refresh_deferred = False
         self.ui.set(self.location_hint, "label", "Loading available cities…")
 
         def loaded(choices):
@@ -745,10 +795,21 @@ class MainWindow(Gtk.ApplicationWindow):
 
         if key in self._cache:
             loaded(self._cache[key])
-        elif self.guard_state.state == "on" and self.state.state == "disconnected":
+        elif self.guard_state.state != "off" and self.state.state != "connected":
+            self._city_refresh_deferred = True
             self.ui.set(self.location_hint, "label", "Use Automatic city to reconnect. City and server lists can refresh through the new VPN.")
+        elif self._locations_loading:
+            # Restoring a saved country must not race the catalog's DNS retries
+            # with a second API request that reports the same failure as fatal.
+            self._city_refresh_deferred = True
         else:
             self._submit("cities", lambda: self.client.cities(selection), loaded, failed)
+
+    def _refresh_deferred_cities(self):
+        if (self._city_refresh_deferred and not self._locations_loading and not self.control_busy
+                and self._startup_ready and not self.startup_state.running and self.location is not None
+                and (self.state.state == "connected" or self.guard_state.state == "off")):
+            self._load_cities()
 
     def _city_changed(self, *_):
         if self._changing_choices or self._translating:
@@ -834,6 +895,7 @@ class MainWindow(Gtk.ApplicationWindow):
         ready = self.client.demo or not self.installation.needs_setup
         can_connect = self.guard_state.state == "off" or (self.guard_state.state == "on" and self.protocol.get_active_id() == "wireguard")
         switching = self.state.state == "connected" and self._selection_differs()
+        self.ui.set(self.connect_button, "label", "Reconnect" if self.state.state == "connected" else "Connect")
         self.connect_button.set_sensitive(not busy and available and ready and can_connect
                                           and self.location is not None and (self.state.state == "disconnected" or switching))
         self.ui.set(self.connect_button, "tooltip-text", "Refresh to verify VPN-only protection before reconnecting."
@@ -849,9 +911,9 @@ class MainWindow(Gtk.ApplicationWindow):
             "Connect using the selected location. Linux will request administrator authorization.")
         if not self.control_busy:
             if switching and can_connect:
-                message = "Connect will disconnect the current VPN and connect to the selected destination."
+                message = "Reconnect will disconnect the current VPN and connect to the selected destination."
                 if self.guard_state.state == "on":
-                    message = "Connect will disconnect the current VPN and connect to the selected destination. VPN only stays on."
+                    message = "Reconnect will disconnect the current VPN and connect to the selected destination. VPN only stays on."
                 self.ui.set(self.operation_note, "label", message)
             elif self.state.state == "disconnected" and self.guard_state.state != "off":
                 if self.guard_state.state == "unknown":
@@ -882,7 +944,9 @@ class MainWindow(Gtk.ApplicationWindow):
         startup_ready = not busy and self.startup_state.available and available and ready and self.location is not None
         self.startup_toggle.set_sensitive(not busy and self.startup_state.available and (self.startup_state.enabled or startup_ready))
         self.startup_save.set_sensitive(startup_ready and self.startup_state.enabled)
-        self.startup_guard.set_sensitive(not busy and self.startup_state.available and self.protocol.get_active_id() == "wireguard")
+        startup_wireguard = not busy and self.startup_state.available and self.protocol.get_active_id() == "wireguard"
+        self.startup_guard.set_sensitive(startup_wireguard and not self.startup_block.get_active())
+        self.startup_block.set_sensitive(startup_wireguard)
         if self.about_dialog is not None:
             self.about_dialog.sync_actions()
         try:
@@ -974,7 +1038,7 @@ class MainWindow(Gtk.ApplicationWindow):
             context.remove_class(name)
         context.add_class(status.state)
         if status.state == "connected":
-            message = msg("{detail}\nChoose another destination, then Connect to switch.", detail=msg(status.detail))
+            message = msg("{detail}\nChoose another destination, then Reconnect to switch.", detail=msg(status.detail))
         elif status.state == "disconnected":
             message = "Choose a location, then connect when you’re ready."
         else:
@@ -982,6 +1046,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.ui.set(self.status_detail, "label", message)
         if changed:
             self._append_log(status.detail)
+        self._refresh_deferred_cities()
         self._refresh_deferred_servers()
         self._sync_controls()
         self._refresh_public_ip()
@@ -1056,7 +1121,15 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def _refresh_public_ip(self):
         state = self.state.state
-        if self.status_pending:
+        # The boot service runs independently of the GUI. A disconnected
+        # snapshot taken during startup must not label a later VPN exit as
+        # the before-VPN address.
+        if not self._startup_ready or self.startup_state.running:
+            if self._ip_state is not None or self._ip_pending:
+                self._invalidate_public_ip()
+            self.ui.set(self.current_ip_label, "label", "Waiting for the startup VPN check to finish…")
+            return
+        if self.status_pending or self._startup_pending or self._guard_pending:
             return
         if self.control_busy or state == "unknown" or not self.client.binary:
             if self._ip_state is not None or self._ip_pending:
@@ -1127,6 +1200,7 @@ class MainWindow(Gtk.ApplicationWindow):
         finally:
             self._setting_guard = False
         self.ui.set(self.guard_label, "label", status.detail)
+        self._refresh_deferred_cities()
         self._refresh_deferred_servers()
         self._sync_controls()
         self._refresh_public_ip()
@@ -1187,12 +1261,14 @@ class MainWindow(Gtk.ApplicationWindow):
             self._startup_ready = False
             self.ui.set(self.startup_detail, "label", str(error))
             self._sync_controls()
+            self._refresh_public_ip()
             self.refresh_button.set_sensitive(not self.control_busy)
 
         self._submit("startup-status", manager.inspect, loaded, failed)
 
     def _apply_startup(self, state, *, reset_form=False):
         first = not self._startup_ready
+        recheck = not state.running and (self.startup_state.running or (first and state.enabled))
         self._startup_ready = True
         self.startup_state = state
         self._setting_startup = True
@@ -1200,14 +1276,33 @@ class MainWindow(Gtk.ApplicationWindow):
             self.startup_toggle.set_active(state.enabled)
             if first or reset_form:
                 self.startup_guard.set_active(state.vpn_only)
+                self.startup_block.set_active(state.block_until_connected)
         finally:
             self._setting_startup = False
         self.ui.set(self.startup_detail, "label", state.detail_message or state.detail)
+        if recheck:
+            # Neither status nor protection replies from before boot completion
+            # can establish which route a new public-IP request will use.
+            self._invalidate_public_ip()
+            if self._active_selection is None and self._pending_selection is None:
+                self._pending_selection = state.boot_selection
+            for key in ("status", "guard-status"):
+                self._requests[key] = self._requests.get(key, 0) + 1
+            self.status_pending = self._guard_pending = False
+            self.refresh_status()
+            self.refresh_guard()
         self._sync_controls()
+        self._refresh_public_ip()
 
     def _startup_toggled(self, *_):
         if not self._setting_startup:
             self._change_startup(self.startup_toggle.get_active())
+
+    def _startup_block_toggled(self, *_):
+        if not self._setting_startup:
+            if self.startup_block.get_active():
+                self.startup_guard.set_active(True)
+            self._sync_controls()
 
     def _change_startup(self, enabled):
         if self.control_busy or self._setup_running() or self.startup_state.running or not self._startup_ready or not self.startup_state.available:
@@ -1222,6 +1317,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self._show_error(error)
             return
         vpn_only = self.startup_guard.get_active() and self.protocol.get_active_id() == "wireguard"
+        block_until_connected = self.startup_block.get_active() and self.protocol.get_active_id() == "wireguard"
         self.control_busy = True
         for key in ("startup-status", "status", "guard-status"):
             self._requests[key] = self._requests.get(key, 0) + 1
@@ -1249,7 +1345,7 @@ class MainWindow(Gtk.ApplicationWindow):
             finish()
 
         manager = self.get_application().startup
-        work = (lambda: manager.configure(selection, vpn_only)) if enabled else manager.disable
+        work = (lambda: manager.configure(selection, vpn_only, block_until_connected)) if enabled else manager.disable
         self._submit("startup-change", work, finish, failed)
 
     def _control(self, action):

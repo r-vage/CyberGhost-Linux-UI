@@ -31,9 +31,10 @@ class GuardStatus:
     detail: str
 
 
-def ruleset(mark):
-    if type(mark) is not int or not 0 < mark <= 0xFFFFFFFF:
+def ruleset(mark=None):
+    if mark is not None and (type(mark) is not int or not 0 < mark <= 0xFFFFFFFF):
         raise ValueError("WireGuard must have a nonzero firewall mark.")
+    transport = f"  meta l4proto udp meta mark {mark} accept\n" if mark is not None else ""
     # Interface names survive removal/recreation. Only WireGuard's marked UDP
     # transport may leave another interface, plus local network maintenance.
     # In particular, existing direct connections are NOT exempted.
@@ -43,8 +44,7 @@ def ruleset(mark):
   type filter hook output priority 20; policy drop;
   oifname "lo" accept
   oifname "{INTERFACE}" accept
-  meta l4proto udp meta mark {mark} accept
-  udp sport 68 udp dport 67 accept
+{transport}  udp sport 68 udp dport 67 accept
   ip6 daddr ff02::1:2 udp sport 546 udp dport 547 accept
   ip6 daddr {{ fe80::/10, ff02::/16 }} icmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} accept
  }}
@@ -197,8 +197,8 @@ def serve(listener, firewall, runtime):
                     listener.close()
                     (runtime / "firewall.sock").unlink(missing_ok=True)
                     stop = True
-                elif action == b"enable\n" and peer_uid(connection) == 0:
-                    mark = firewall.wireguard_mark()
+                elif action in {b"enable\n", b"block\n"} and peer_uid(connection) == 0:
+                    mark = firewall.wireguard_mark() if action == b"enable\n" else None
                     marker(runtime, True)
                     result = firewall.enable(mark)
                 else:
@@ -215,7 +215,7 @@ def serve(listener, firewall, runtime):
 
 
 def authorized_action(action, runtime=RUNTIME, firewall=None, *, _lock=None):
-    if os.geteuid() != 0 or action not in {"enable", "disable"}:
+    if os.geteuid() != 0 or action not in {"enable", "disable", "block"}:
         raise RuntimeError("Run a fixed firewall action through administrator authorization.")
     secure_runtime(runtime)
     lock = _lock if _lock is not None else os.open(runtime / "action.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -235,7 +235,7 @@ def authorized_action(action, runtime=RUNTIME, firewall=None, *, _lock=None):
             result = firewall.disable()
             marker(runtime, False)
             return result
-        mark = firewall.wireguard_mark()
+        mark = firewall.wireguard_mark() if action == "enable" else None
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(str(socket_path))
             os.chmod(socket_path, 0o666)
@@ -251,6 +251,15 @@ def authorized_action(action, runtime=RUNTIME, firewall=None, *, _lock=None):
                 raise
             if pid == 0:
                 os.close(lock)
+                # A boot runner may hold its own flock. The monitor must not
+                # inherit that lock and prevent the later connection service.
+                for entry in list(Path("/proc/self/fd").iterdir()):
+                    descriptor = int(entry.name)
+                    if descriptor > 2 and descriptor != listener.fileno():
+                        try:
+                            os.close(descriptor)
+                        except OSError:
+                            pass  # The directory iterator's descriptor is already closed.
                 os.setsid()
                 os.chdir("/")
                 null = os.open(os.devnull, os.O_RDWR)
