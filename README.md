@@ -331,9 +331,10 @@ home directory can prevent access to CyberGhost's account file before login.
 In that case, connect manually after signing in.
 
 **Block internet until VPN connects (WireGuard)** installs an early firewall before
-the network managers start. Ordinary internet and LAN traffic stay blocked while
-CyberGhost connects; DHCP, IPv6 network maintenance and the isolated CyberGhost
-setup process remain allowed. Only that process gets direct DNS/API access. The
+the network managers start. External internet traffic stays blocked while
+CyberGhost connects; local networks, Docker, DHCP, IPv6 network maintenance and
+the isolated CyberGhost setup process remain allowed. Only that process gets
+direct external DNS/API access. The
 new WireGuard tunnel's verified encrypted transport is allowed as it becomes ready.
 Protection remains enabled after connecting and if setup fails. Existing startup
 profiles keep their previous behavior until you select this option and save.
@@ -385,18 +386,22 @@ authorization for each change. No global password-free sudo/Python rule is added
 in the top panel and authorize the firewall change. OpenVPN is not supported by
 this option. Existing firewall rules remain in place.
 
-While enabled, normal IPv4 and IPv6 traffic must leave through CyberGhost. Direct
-internet and LAN traffic are blocked if the tunnel disappears, including existing
-connections and forwarded traffic such as ordinary Docker bridge traffic. Local
-loopback, WireGuard's encrypted transport and essential DHCP/IPv6 neighbor discovery
-remain allowed. It does not control privileged applications or separate network
+While enabled, external IPv4 and IPv6 traffic must leave through CyberGhost,
+including container internet traffic. Direct external connections remain blocked
+if the tunnel disappears, including existing connections. Local networks and
+Docker services remain accessible before, during and after the VPN connection.
+Internal addresses are IPv4 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and
+`169.254.0.0/16`, plus IPv6 `fc00::/7` and `fe80::/10`. Local forwarding requires
+both source and destination to be internal. Loopback, WireGuard's encrypted
+transport and essential DHCP/IPv6 neighbor discovery also remain allowed.
+It does not control privileged applications or separate network
 namespaces that manage their own network interfaces.
 
 Protection **stays enabled after Disconnect or Quit**, until you turn it off or
 reboot. Startup can reapply it after connecting or, with **Block internet until VPN
 connects**, before networking starts. Leave it checked when changing servers: **Connect**, or **Reconnect**
 when already connected, establishes the
-next WireGuard connection while keeping ordinary traffic blocked. Linux authorizes
+next WireGuard connection while keeping external traffic blocked. Linux authorizes
 the connection once; there is no separate protection toggle. A temporary exception
 is restricted to CyberGhost's connection process and is removed after success or
 failure. Protected reconnects require cgroup v2 and the `unshare`, `mount` and

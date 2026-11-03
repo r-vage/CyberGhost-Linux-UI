@@ -330,9 +330,9 @@ Kontodatei vor der Anmeldung verhindern. Verbinde in diesem Fall nach der Anmeld
 manuell.
 
 **Internet bis zur VPN-Verbindung sperren (WireGuard)** aktiviert eine Firewall vor
-dem Start der Netzwerkverwaltung. Normaler Internet- und LAN-Verkehr bleibt gesperrt.
-DHCP, IPv6-Netzwerkverwaltung und die isolierte CyberGhost-Einrichtung bleiben erlaubt.
-Nur der Verbindungsprozess erhält direkten DNS-/API-Zugriff; der geprüfte verschlüsselte
+dem Start der Netzwerkverwaltung. Externer Internetverkehr bleibt gesperrt.
+Lokale Netzwerke, Docker, DHCP, IPv6-Netzwerkverwaltung und die isolierte CyberGhost-Einrichtung bleiben erlaubt.
+Nur der Verbindungsprozess erhält direkten externen DNS-/API-Zugriff; der geprüfte verschlüsselte
 WireGuard-Transport wird freigegeben, sobald der Tunnel bereit ist. Der Schutz bleibt
 bei Verbindungsfehlern und nach erfolgreicher Verbindung aktiv. Wähle die Option und
 speichere die Starteinstellungen, damit sie beim nächsten Systemstart gilt.
@@ -385,10 +385,13 @@ dann die Option in der oberen Karte und autorisiere die Firewall-Änderung.
 OpenVPN wird von dieser Option nicht unterstützt. Vorhandene Firewall-Regeln
 bleiben bestehen.
 
-Bei aktivem Schutz muss normaler IPv4- und IPv6-Verkehr durch CyberGhost fließen.
-Fällt der Tunnel aus, werden direkter Internet- und LAN-Verkehr blockiert, auch
-bestehende Verbindungen und weitergeleiteter Verkehr wie üblicher Docker-Bridge-Verkehr.
-Loopback, der verschlüsselte WireGuard-Transport und notwendige DHCP-/IPv6-
+Bei aktivem Schutz muss externer IPv4- und IPv6-Verkehr durch CyberGhost fließen,
+auch der Internetverkehr von Containern. Fällt der Tunnel aus, bleiben direkte
+externe Verbindungen gesperrt, einschließlich bestehender Verbindungen.
+Lokale Netzwerke und Docker-Dienste bleiben vor, während und nach der VPN-Verbindung erreichbar.
+Intern sind IPv4 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`
+sowie IPv6 `fc00::/7` und `fe80::/10`. Lokale Weiterleitung erfordert interne
+Quell- und Zieladressen. Loopback, der verschlüsselte WireGuard-Transport und notwendige DHCP-/IPv6-
 Nachbarschaftserkennung bleiben erlaubt. Privilegierte Anwendungen und separate
 Netzwerk-Namespaces mit eigenen Schnittstellen werden damit nicht kontrolliert.
 
@@ -396,7 +399,7 @@ Der Schutz **bleibt nach Trennen oder Beenden aktiv**, bis du ihn ausschaltest
 oder neu startest. Die Starteinstellungen können ihn nach dem Verbinden oder mit
 **Internet bis zur VPN-Verbindung sperren** bereits vor dem Netzwerkstart aktivieren.
 Lasse ihn beim Serverwechsel eingeschaltet:
-**Verbinden** stellt die nächste WireGuard-Verbindung her, während normaler
+**Verbinden** stellt die nächste WireGuard-Verbindung her, während externer
 Verkehr blockiert bleibt. Es genügt eine Autorisierung. Eine vorübergehende
 Ausnahme gilt ausschließlich für den CyberGhost-Verbindungsprozess und wird bei
 Erfolg oder Fehler entfernt.

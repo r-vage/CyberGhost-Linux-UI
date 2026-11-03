@@ -107,7 +107,7 @@ while True:
         break
     assert time.monotonic() < deadline, 'Early block prevented encrypted WireGuard transport'
     time.sleep(.1)
-for family, destination in [(socket.AF_INET, '198.18.0.3'), (socket.AF_INET6, 'fd18::2')]:
+for family, destination in [(socket.AF_INET, '198.18.0.3'), (socket.AF_INET6, '2001:db8:18::2')]:
     with socket.socket(family, socket.SOCK_DGRAM) as connection:
         try:
             connection.sendto(b'ordinary traffic', (destination, 9999))
@@ -123,7 +123,7 @@ print('Private DNS, host DNS update and encrypted WireGuard transport under the 
         (job / 'job.json').write_text(json.dumps(config))
         for name in ('all', 'default', 'plain0'):
             Path(f'/proc/sys/net/ipv6/conf/{name}/disable_ipv6').write_text('0')
-        subprocess.run(['ip', '-6', 'addr', 'add', 'fd18::1/64', 'dev', 'plain0', 'nodad'], check=True)
+        subprocess.run(['ip', '-6', 'addr', 'add', '2001:db8:18::1/64', 'dev', 'plain0', 'nodad'], check=True)
         # No cgroup exception or guessed mark is needed for this inert CLI: it
         # only changes the isolated interface. Observe the *kernel's* encrypted
         # outer packets after our drop chain, while the parent tracks its mark.

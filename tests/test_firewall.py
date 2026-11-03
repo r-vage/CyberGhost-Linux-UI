@@ -1,5 +1,6 @@
 from dataclasses import asdict
 from io import BytesIO
+from ipaddress import ip_address, ip_network
 import json
 from pathlib import Path
 import subprocess
@@ -8,7 +9,8 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from cyberghost_desktop.cli import CliError
-from cyberghost_desktop.firewall import Firewall, GuardStatus, OWNER, TABLE, fingerprint, ruleset, authorized_action, serve
+from cyberghost_desktop.firewall import (Firewall, GuardStatus, INTERNAL_IPV4, INTERNAL_IPV6,
+                                       OWNER, TABLE, fingerprint, ruleset, authorized_action, serve)
 from cyberghost_desktop.vpn_guard import DemoGuard, VPNGuard
 
 
@@ -19,6 +21,29 @@ def document(handle=1, policy="drop", owner=OWNER):
 
 
 class FirewallTests(unittest.TestCase):
+    def test_internal_scope_includes_lan_and_docker_but_excludes_public_addresses(self):
+        networks = [ip_network(value) for value in (*INTERNAL_IPV4, *INTERNAL_IPV6)]
+        for value in ('10.20.0.2', '172.17.0.2', '172.31.255.254', '192.168.1.5',
+                      '169.254.10.3', 'fd18::2', 'fe80::2'):
+            with self.subTest(internal=value):
+                self.assertTrue(any(ip_address(value) in network for network in networks))
+        for value in ('1.1.1.1', '172.15.0.2', '172.32.0.2', '192.169.0.2',
+                      '100.64.0.2', '2001:4860::8888', '2001:db8::2', 'ff05::2'):
+            with self.subTest(external=value):
+                self.assertFalse(any(ip_address(value) in network for network in networks))
+
+    def test_local_forwarding_does_not_allow_all_private_source_internet_traffic(self):
+        for mark in (None, 51820):
+            source = ruleset(mark)
+            output, forward = source.split('chain forward')
+            for family, name in (('ip', 'internal_v4'), ('ip6', 'internal_v6')):
+                self.assertIn(f'{family} daddr @{name} accept', output)
+                self.assertIn(f'{family} saddr @{name} {family} daddr @{name} accept', forward)
+                self.assertNotIn(f'{family} saddr @{name} accept', forward)
+                self.assertNotIn(f'\n  {family} daddr @{name} accept', forward)
+            self.assertNotIn('ct state established', output)
+            self.assertEqual(source.count('policy drop'), 2)
+
     def test_early_boot_rules_block_without_guessing_a_transport_mark(self):
         source = ruleset()
         self.assertEqual(source.count('policy drop'), 2)

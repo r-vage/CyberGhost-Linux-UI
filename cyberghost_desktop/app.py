@@ -328,8 +328,8 @@ class MainWindow(Gtk.ApplicationWindow):
         card.pack_start(self.operation_note, False, False, 0)
         self.guard_toggle = self.ui(Gtk.CheckButton(), label="VPN only (WireGuard)")
         self.guard_toggle.set_halign(Gtk.Align.START)
-        self.ui.set(self.guard_toggle, "tooltip-text", "Optional kill switch. Connect with WireGuard, then enable. Blocks direct IPv4, IPv6 and LAN traffic "
-            "if the VPN drops. Stays on after Disconnect or Quit, until disabled or reboot. "
+        self.ui.set(self.guard_toggle, "tooltip-text", "Optional kill switch. Connect with WireGuard, then enable. External IPv4/IPv6 traffic must use the VPN; "
+            "local networks and Docker remain accessible. Stays on after Disconnect or Quit, until disabled or reboot. "
             "Stays on while changing WireGuard servers. Requires nftables and Linux authorization.")
         self.guard_toggle.connect("toggled", self._guard_toggled)
         card.pack_start(self.guard_toggle, False, False, 0)
@@ -391,7 +391,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.ui.set(self.startup_guard, "tooltip-text", "Optional protection for the startup connection. Early boot traffic can use the normal network until the VPN connects.")
         startup_box.pack_start(self.startup_guard, False, False, 0)
         self.startup_block = self.ui(Gtk.CheckButton(), label="Block internet until VPN connects (WireGuard)")
-        self.ui.set(self.startup_block, "tooltip-text", "Block ordinary internet and LAN traffic before networking starts. Only network maintenance and isolated VPN setup are allowed. Protection stays on if connecting fails and after the VPN connects. Applies on the next boot.")
+        self.ui.set(self.startup_block, "tooltip-text", "Block external internet before networking starts. Local networks, network maintenance and isolated VPN setup remain allowed. Protection stays on if connecting fails and after the VPN connects. Applies on the next boot.")
         self.startup_block.connect("toggled", self._startup_block_toggled)
         startup_box.pack_start(self.startup_block, False, False, 0)
         self.startup_save = self.ui(Gtk.Button(), label="Save current location for startup")

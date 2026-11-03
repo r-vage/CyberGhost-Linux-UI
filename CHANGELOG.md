@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.8 — 2026-11-03
+
+- Allow private IPv4 and IPv6 local networks, link-local addresses and local Docker connections while VPN-only protection is enabled, including before boot connection and after tunnel loss. Keep direct external traffic blocked and require both endpoints of a local forwarded connection to be internal.
+- Update protection status, tooltips and documentation in all supported interface languages to distinguish local access from VPN-only internet access. Verify host/container TCP connectivity and IPv4/IPv6 output and forwarding in isolated network namespaces.
+
 ## 0.1.7 — 2026-11-02
 
 - Add an optional startup setting to block internet before networking starts. Keep ordinary IPv4/IPv6 and LAN traffic blocked while an isolated CyberGhost process connects, allow the verified WireGuard transport, and retain protection on failure. Install the early firewall and network-manager dependencies only when selected; preserve existing post-connect startup behavior. Translate the option into all 15 languages and verify boot handoff, rollback, DNS isolation and kernel traffic blocking.

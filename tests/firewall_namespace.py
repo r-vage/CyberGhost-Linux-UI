@@ -48,22 +48,42 @@ def blocked(address, **kwargs):
 
 
 PEER = '''
-import socket, subprocess, sys
+import socket, socketserver, subprocess, sys, threading
+from pathlib import Path
 def ip(*args):
     subprocess.run(["ip", *args], check=True, stdout=subprocess.DEVNULL)
+class Service(socketserver.BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(2)
+        self.request.recv(1024)
+        self.request.sendall(b"HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\nConnection: close\\r\\n\\r\\nlocal")
+class Server6(socketserver.TCPServer):
+    address_family = socket.AF_INET6
 print("ready", flush=True)
 for command in sys.stdin:
     command = command.strip()
     if command == "setup":
         ip("link", "set", "lo", "up")
+        for name in ("all", "default", "client0"):
+            Path(f"/proc/sys/net/ipv6/conf/{name}/disable_ipv6").write_text("0")
+        ip("addr", "add", "172.17.0.2/24", "dev", "client0")
         ip("addr", "add", "198.19.0.2/24", "dev", "client0")
+        ip("-6", "addr", "add", "fd17::2/64", "dev", "client0", "nodad")
+        ip("-6", "addr", "add", "2001:db8:19::2/64", "dev", "client0", "nodad")
         ip("link", "set", "client0", "up")
-        ip("route", "add", "default", "via", "198.19.0.1")
+        ip("route", "add", "default", "via", "172.17.0.1")
+        ip("-6", "route", "add", "default", "via", "fd17::1")
+        for server_type, address in ((socketserver.TCPServer, '172.17.0.2'), (Server6, 'fd17::2')):
+            server = server_type((address, 11434), Service)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
     elif command == "stop":
         break
     else:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.sendto(b"forwarding test", (command, 9999))
+        address, *source = command.split()
+        with socket.socket(socket.AF_INET6 if ':' in address else socket.AF_INET, socket.SOCK_DGRAM) as s:
+            if source:
+                s.bind((source[0], 0))
+            s.sendto(b"forwarding test", (address, 9999))
     print("ok", flush=True)
 '''
 
@@ -78,8 +98,12 @@ def inner(original_namespace):
     run("ip", "link", "set", "plain0", "up")
     for name in ("all", "default", "plain0"):
         Path(f"/proc/sys/net/ipv6/conf/{name}/disable_ipv6").write_text("0")
+    run("ip", "-6", "addr", "add", "2001:db8:18::1/64", "dev", "plain0", "nodad")
     run("ip", "-6", "addr", "add", "fd18::1/64", "dev", "plain0", "nodad")
+    for address in ("10.20.0.1/24", "192.168.50.1/24", "169.254.25.1/24"):
+        run("ip", "addr", "add", address, "dev", "plain0")
     run("ip", "route", "add", "default", "dev", "plain0")
+    run("ip", "-6", "route", "add", "default", "dev", "plain0")
     # A separate application's table must survive activation and removal.
     run("nft", "-f", "-", source='''table inet namespace_observer {
  counter before { }
@@ -94,8 +118,12 @@ def inner(original_namespace):
     run("ip", "link", "add", "lan0", "type", "veth", "peer", "name", "client0")
     run("ip", "link", "set", "client0", "netns", str(peer.pid))
     run("ip", "addr", "add", "198.19.0.1/24", "dev", "lan0")
+    run("ip", "addr", "add", "172.17.0.1/24", "dev", "lan0")
+    run("ip", "-6", "addr", "add", "fd17::1/64", "dev", "lan0", "nodad")
+    run("ip", "-6", "addr", "add", "2001:db8:19::1/64", "dev", "lan0", "nodad")
     run("ip", "link", "set", "lan0", "up")
     Path("/proc/sys/net/ipv4/ip_forward").write_text("1")
+    Path("/proc/sys/net/ipv6/conf/all/forwarding").write_text("1")
 
     def tell_peer(command):
         peer.stdin.write(command + "\n")
@@ -106,21 +134,40 @@ def inner(original_namespace):
         data = json.loads(run("nft", "-j", "list", "counter", "inet", "namespace_observer", name))
         return next(item["counter"]["packets"] for item in data["nftables"] if "counter" in item)
 
-    def forwarded(address, expected):
+    def forwarded(address, expected, source=None):
         before, after = packets("before"), packets("after")
-        tell_peer(address)
+        tell_peer(address + (" " + source if source else ""))
         deadline = time.monotonic() + 3
         while packets("before") == before and time.monotonic() < deadline:
             time.sleep(.01)
         assert packets("before") > before, "Test packet never entered the forwarding hook"
         assert (packets("after") > after) == expected, "Unexpected forwarding result"
 
+    def local_connections():
+        for address in ('10.20.0.2', '192.168.50.2', '169.254.25.2', 'fd18::2'):
+            send_datagram(address)
+        for address in ('172.17.0.2', 'fd17::2'):
+            with socket.create_connection((address, 11434), timeout=2) as connection:
+                connection.sendall(b'GET /api/tags HTTP/1.0\r\n\r\n')
+                response = b''
+                while data := connection.recv(1024):
+                    response += data
+                assert response.startswith(b'HTTP/1.1 200 OK') and response.endswith(b'local')
+        forwarded('192.168.50.2', True)
+        forwarded('fd18::2', True)
+        # Destination-only exceptions must not admit public-source forwarded traffic.
+        forwarded('192.168.50.2', False, '198.19.0.2')
+        forwarded('fd18::2', False, '2001:db8:19::2')
+        # Private sources must not exempt an external destination from the kill switch.
+        forwarded('198.18.0.2', False)
+        forwarded('2001:db8:18::2', False)
+
     with tempfile.TemporaryDirectory(prefix="cyberghost-ns-") as directory:
         runtime = Path(directory) / "runtime"
         try:
             tell_peer("setup")
             send_datagram("198.18.0.2")
-            send_datagram("fd18::2")
+            send_datagram("2001:db8:18::2")
             forwarded("198.18.0.2", True)
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as existing:
                 send_datagram("198.18.0.2", existing=existing)
@@ -147,8 +194,9 @@ def inner(original_namespace):
                 assert request("status", runtime).state == "on"
                 blocked("198.18.0.2", existing=existing)
                 blocked("198.18.0.2")
-                blocked("fd18::2")
+                blocked("2001:db8:18::2")
                 forwarded("198.18.0.2", False)
+                local_connections()
                 # At boot there is no tunnel or trusted mark. Block even marked
                 # traffic, while allowing DHCP to establish the uplink.
                 blocked("198.18.0.2", mark=51820)
@@ -160,6 +208,7 @@ def inner(original_namespace):
                 run("ip", "link", "set", "cyberghost", "up")
                 run("ip", "route", "replace", "default", "dev", "cyberghost")
                 assert authorized_action("enable", runtime).state == "on"
+                local_connections()
                 # Only the marked UDP outer transport may use the direct path.
                 send_datagram("198.18.0.2", mark=51820)
                 blocked("198.18.0.2", mark=123)
@@ -177,13 +226,19 @@ def inner(original_namespace):
             run("ip", "link", "del", "cyberghost")
             run("ip", "link", "add", "cyberghost", "type", "dummy")
             run("ip", "link", "set", "cyberghost", "up")
-            run("ip", "route", "add", "10.200.0.0/24", "dev", "cyberghost")
-            send_datagram("10.200.0.2")
-            forwarded("10.200.0.2", True)
+            run("ip", "route", "add", "198.51.100.0/24", "dev", "cyberghost")
+            run("ip", "-6", "route", "add", "2001:db8:51::/64", "dev", "cyberghost")
+            send_datagram("198.51.100.2")
+            send_datagram("2001:db8:51::2")
+            forwarded("198.51.100.2", True)
+            forwarded("2001:db8:51::2", True)
             run("ip", "link", "del", "cyberghost")
             run("ip", "route", "add", "default", "dev", "plain0")
-            blocked("10.200.0.2")
-            forwarded("10.200.0.2", False)
+            blocked("198.51.100.2")
+            blocked("2001:db8:51::2")
+            forwarded("198.51.100.2", False)
+            forwarded("2001:db8:51::2", False)
+            local_connections()
             assert request("status", runtime).state == "on", "Protection must survive a vanished tunnel"
             # Exercise the actual kernel cgroup socket match. This namespace has
             # no route to the host/internet and never changes host cgroups.
@@ -194,24 +249,24 @@ def inner(original_namespace):
             if Path('/sys/fs/cgroup/init.scope').is_dir():
                 run("nft", "-f", "-", source=connection_rule('init.scope'))
                 blocked("198.18.0.2")
-                blocked("fd18::2")
+                blocked("2001:db8:18::2")
                 remove_exception(guard, 'init.scope')
             run("nft", "-f", "-", source=connection_rule(group))
             send_datagram("198.18.0.2")
-            send_datagram("fd18::2")
+            send_datagram("2001:db8:18::2")
             forwarded("198.18.0.2", False)
             remove_exception(guard, group)
             blocked("198.18.0.2")
-            blocked("fd18::2")
+            blocked("2001:db8:18::2")
             assert request("status", runtime).state == "on", "Removing the exception must restore the original rules"
             assert authorized_action("disable", runtime).state == "off"
             send_datagram("198.18.0.2")
-            send_datagram("fd18::2")
+            send_datagram("2001:db8:18::2")
             forwarded("198.18.0.2", True)
             assert Firewall().document() is None
             assert not (runtime / "active").exists()
             assert packets("before") > 0, "An unrelated table was removed"
-            print("Kernel checks passed: early boot block without a tunnel, DHCP, IPv4/IPv6, existing connections, marked WireGuard transport, loopback, forwarding, tunnel removal, rule verification and scoped cleanup.", flush=True)
+            print("Kernel checks passed: local IPv4/IPv6 TCP services, LAN/Docker forwarding, external output/forward blocking before VPN and after tunnel loss, established connections, DHCP, WireGuard transport, loopback, rule verification and scoped cleanup.", flush=True)
         finally:
             authorized_action("disable", runtime)
             peer.stdin.write("stop\n")

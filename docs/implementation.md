@@ -270,10 +270,35 @@ One atomic nft transaction creates/replaces the app-owned `inet cyberghost_deskt
 table. A matching ownership comment is required before replacing/deleting an
 existing table. Other applications' rules and wg-quick's own tables are unchanged.
 Output and forward chains drop traffic by default. Allowed paths are the exact
-`cyberghost` interface, loopback, WireGuard's marked UDP outer transport, DHCP and
-IPv6 neighbor discovery. Forwarded return traffic from the tunnel must be established
-or related. Established direct output connections are deliberately not exempted.
+`cyberghost` interface, loopback, private/link-local destinations, WireGuard's
+marked UDP outer transport, DHCP and IPv6 neighbor discovery. The internal sets
+contain RFC1918 IPv4 plus `169.254.0.0/16`, and IPv6 `fc00::/7` plus `fe80::/10`.
+Host output may reach these destinations directly, including docker-proxy's
+connection from a loopback-published port to its container. Local forwarding
+requires both source and destination in the matching internal set. A private
+container source alone never permits an external destination. Forwarded return
+traffic from the tunnel must be established or related. Established direct
+external output connections are deliberately not exempted. The local policy
+applies with no tunnel, during VPN use and after tunnel loss; services on private
+addresses remain reachable even when those services themselves relay requests.
 Both IP versions are covered; disappearing/recreated interfaces are matched by name.
+
+The 0.1.8 local-network policy was qualified on 2026-11-03 with 216 unit tests,
+real nftables/WireGuard tests in fresh user/network/mount namespaces, and real
+GTK translation checks across all 15 languages. The network tests exercise
+IPv4/IPv6 TCP services on container-style addresses, local forwarding, public
+source/destination rejection, existing external sockets, early boot, protected
+reconnect, and tunnel removal. They never modify the host firewall or connect
+a real VPN.
+
+Live validation with VPN-only still enabled confirmed Ollama 0.33.1's
+loopback-published Docker API returns HTTP 200 from both localhost and 127.0.0.1.
+The previously stopped, idle test container was restored to stopped afterward;
+no model inference was performed. External IPv4 routing remained on `cyberghost`.
+The app-owned authorization and boot helper copies were refreshed, preserving
+startup settings, and the old monitor was replaced while its kernel rules stayed
+installed until the new atomic rules transaction. Updating checkout files alone
+does not update an already running root monitor or its installed helper copies.
 
 After activation a root helper serves a Unix socket in a root-owned runtime
 directory. Normal users may request status; mutations require a root peer, reached

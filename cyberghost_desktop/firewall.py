@@ -23,6 +23,8 @@ TABLE = "cyberghost_desktop"
 OWNER = "CyberGhost Desktop VPN-only"
 INTERFACE = "cyberghost"
 SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+INTERNAL_IPV4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")
+INTERNAL_IPV6 = ("fc00::/7", "fe80::/10")
 
 
 @dataclass(frozen=True)
@@ -35,15 +37,26 @@ def ruleset(mark=None):
     if mark is not None and (type(mark) is not int or not 0 < mark <= 0xFFFFFFFF):
         raise ValueError("WireGuard must have a nonzero firewall mark.")
     transport = f"  meta l4proto udp meta mark {mark} accept\n" if mark is not None else ""
-    # Interface names survive removal/recreation. Only WireGuard's marked UDP
-    # transport may leave another interface, plus local network maintenance.
-    # In particular, existing direct connections are NOT exempted.
+    # Internal destinations include LANs and Docker's host/proxy connections.
+    # Forwarding requires BOTH endpoints to be internal: a private container
+    # source alone must never exempt internet traffic from the VPN requirement.
+    # Existing direct internet connections are deliberately not exempted.
     return f'''table inet {TABLE} {{
  comment "{OWNER}"
+ set internal_v4 {{
+  type ipv4_addr; flags interval;
+  elements = {{ {", ".join(INTERNAL_IPV4)} }}
+ }}
+ set internal_v6 {{
+  type ipv6_addr; flags interval;
+  elements = {{ {", ".join(INTERNAL_IPV6)} }}
+ }}
  chain output {{
   type filter hook output priority 20; policy drop;
   oifname "lo" accept
   oifname "{INTERFACE}" accept
+  ip daddr @internal_v4 accept
+  ip6 daddr @internal_v6 accept
 {transport}  udp sport 68 udp dport 67 accept
   ip6 daddr ff02::1:2 udp sport 546 udp dport 547 accept
   ip6 daddr {{ fe80::/10, ff02::/16 }} icmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} accept
@@ -52,6 +65,8 @@ def ruleset(mark=None):
   type filter hook forward priority 20; policy drop;
   oifname "{INTERFACE}" accept
   iifname "{INTERFACE}" ct state established,related accept
+  ip saddr @internal_v4 ip daddr @internal_v4 accept
+  ip6 saddr @internal_v6 ip6 daddr @internal_v6 accept
  }}
 }}
 '''
@@ -135,7 +150,7 @@ class Firewall:
             return GuardStatus("off", "Off · direct internet access is allowed.")
         if self.expected is None or fingerprint(document) != self.expected:
             return GuardStatus("unknown", "Firewall rules changed. Protection cannot be verified; turn VPN only off and on again.")
-        return GuardStatus("on", "On · direct internet and LAN traffic are blocked outside CyberGhost.")
+        return GuardStatus("on", "On · internet uses CyberGhost; local networks remain accessible.")
 
 
 def peer_uid(connection):
