@@ -118,34 +118,45 @@ class StartupManager:
             target += " · " + selection.server
         detail = "Saved: " + target + ". Starts on the next boot."
         display = msg("Saved: {target}. Starts on the next boot.", target=target)
-        if fields.get("UnitFileState") != "enabled":
-            detail = "Boot service is not enabled. Save the startup settings again."
-            display = msg(detail)
-        elif not self.autostart.path.exists():
-            detail = "Boot VPN is enabled, but desktop startup is missing. Save settings to restore it."
-            display = msg(detail)
         status_file = self.paths.runtime / "status.json"
         boot_selection = None
         if status_file.is_file() and status_file.stat().st_size < 16384:
             try:
                 status = json.loads(status_file.read_text())
-                # This /run report belongs to the current boot. A profile saved
-                # afterward describes the next boot, not the current selection.
-                if (not running and status.get("state") == "connected"
-                        and self.paths.profile.stat().st_mtime_ns <= status_file.stat().st_mtime_ns):
-                    boot_selection = selection
+                if not isinstance(status, dict):
+                    raise ValueError("Invalid startup status report.")
+                # Only a connection actually made by this boot runner has a
+                # known destination. An existing VPN may be somewhere else;
+                # the saved profile describes a future boot, not that tunnel.
+                if (not running and fields.get("ActiveState") != "failed" and status.get("state") == "connected"
+                        and isinstance(status.get("selection"), dict)):
+                    boot_selection = Selection(**status["selection"])
+                    boot_selection.connect_args()
                 if isinstance(status.get("detail"), str):
                     detail = ("" if running else "Last boot: ") + status["detail"][:400] + "\nSaved: " + target
                     display = msg("{detail}\nSaved: {target}" if running else "Last boot: {detail}\nSaved: {target}",
                                   detail=msg(status["detail"][:400]), target=target)
-            except (ValueError, OSError):
-                pass
+            except (TypeError, ValueError, OSError):
+                boot_selection = None
         elif running:
             detail = "The boot VPN service is starting…\nSaved: " + target
             display = msg("The boot VPN service is starting…\nSaved: {target}", target=target)
         elif fields.get("ActiveState") == "failed":
             detail = "The boot VPN service failed. Connect manually and check its system journal.\nSaved: " + target
             display = msg("The boot VPN service failed. Connect manually and check its system journal.\nSaved: {target}", target=target)
+        # The last run can have succeeded even though a unit was disabled,
+        # failed later, or lost its desktop entry. Current warnings take
+        # precedence over the historical success message.
+        warning = None
+        if fields.get("UnitFileState") != "enabled":
+            warning = "Boot service is not enabled. Save the startup settings again."
+        elif not self.autostart.path.exists():
+            warning = "Boot VPN is enabled, but desktop startup is missing. Save settings to restore it."
+        elif fields.get("ActiveState") == "failed" and not running:
+            warning = "The boot VPN service failed. Connect manually and check its system journal."
+        if warning:
+            detail = warning + "\nSaved: " + target
+            display = msg("{detail}\nSaved: {target}", detail=msg(warning), target=target)
         return StartupState(True, selection, bool(profile["vpn_only"]), running, detail,
                             detail_message=display, boot_selection=boot_selection,
                             block_until_connected=bool(profile.get("block_until_connected", False)))
@@ -206,6 +217,8 @@ class DemoStartup:
 
     def configure(self, selection, vpn_only, block_until_connected=False):
         selection.connect_args()
+        if (vpn_only or block_until_connected) and selection.protocol != "wireguard":
+            raise CliError("VPN only at boot requires WireGuard.")
         self.state = StartupState(True, selection, vpn_only or block_until_connected, False, "Demo · saved startup location: " + selection.country,
                                   detail_message=msg("Demo · saved startup location: {country}", country=selection.country),
                                   block_until_connected=block_until_connected)

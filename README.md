@@ -13,13 +13,13 @@ locations, connection controls, startup and setup.
 
 ## What it does
 
-- Search live country lists, streaming services and P2P locations, with bundled country flags that work offline.
+- Search saved country lists, streaming services and P2P locations; fetch missing lists once and update them with Refresh/F5.
 - Save favorite locations and remember your protocol and transport choices.
 - Choose automatic city/server selection or an individual server with its reported load.
 - Connect with WireGuard or OpenVPN; choose UDP or TCP for OpenVPN.
 - Check connection status automatically and inspect the CLI's output.
 - Compare the public IPv4 address from before connecting with the current VPN exit.
-- Optionally block traffic outside CyberGhost with a WireGuard kill switch.
+- Block internet without the VPN by default for WireGuard connections, while keeping local LAN/Docker services accessible.
 - Optionally connect a saved location during boot with one-time authorized setup,
   and open the desktop app when you sign in.
 - Use the optional desktop tray to reopen the window or disconnect. The same app
@@ -48,7 +48,7 @@ CyberGhost configuration, instead of looking for a separate root account setup.
   The CLI can be installed afterward through **Setup**; it is not needed to open the UI.
 - `pkexec` and a desktop polkit authentication agent for connection changes.
 - `iproute2` (`ip`) for WireGuard status checks without administrator prompts.
-- Optional `nftables` and `wireguard-tools` for the WireGuard kill switch.
+- `nftables`, `wireguard-tools`, cgroup v2 and util-linux for the default WireGuard kill switch and protected connection setup.
 - Optional systemd for connection during boot. The CLI and its account file must
   be available before desktop login.
 - Bash, `sudo` and a terminal for guided CLI installation and account setup.
@@ -60,7 +60,7 @@ On Ubuntu or Linux Mint, the UI packages are:
 sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 pkexec iproute2 bash sudo
 # Optional tray support:
 sudo apt install gir1.2-ayatanaappindicator3-0.1
-# Optional kill switch:
+# Default WireGuard protection:
 sudo apt install nftables wireguard-tools
 ```
 
@@ -243,7 +243,7 @@ To remove the UI launchers:
 
 This removes only this app's launchers and icon. It does not remove CyberGhost,
 disconnect your VPN, disable an active kill switch, or delete preferences. Turn
-**VPN only** off before removing the project if you want normal internet access
+**Block internet without VPN** off before removing the project if you want normal internet access
 after disconnecting. You can then remove the project folder.
 If **Connect VPN during boot** is enabled, disable it in the app first. The
 uninstaller requires this so its authorized boot service is also removed.
@@ -262,9 +262,14 @@ and its internet route to handle this. If status cannot be verified, it shows
 **Status unavailable** and keeps Connect disabled until a disconnected state is
 confirmed. Refresh checks again; Disconnect remains available for an existing tunnel.
 
-Disconnect before connecting somewhere else. Streaming selections keep their
+Choose another destination and use **Reconnect** to switch. Streaming selections keep their
 exact service name and let CyberGhost choose the matching server. City and server
 loads are snapshots supplied by the CLI, not speed tests.
+
+Country, city and server lists are saved and reused across launches and category
+changes. Missing lists are fetched when needed. **Refresh/F5** updates the current
+category and the city/server lists you browse in it, retaining saved choices if
+the request fails. No catalog download is needed just to reopen the app.
 
 Use **Start ping**, to the right of Connect and Disconnect below the current IP,
 to see the latest round-trip time in milliseconds. It sends one ICMP probe to
@@ -300,7 +305,7 @@ by default. DNS and account configuration remain with the official CLI.
 
 1. Choose the location, protocol and optional city/server you want at startup.
 2. Expand **Startup** beneath the connection settings.
-3. Optionally select **Enable VPN only after connecting (WireGuard)**, or
+3. Keep **Keep internet blocked if the VPN drops (WireGuard)** selected, or choose
    **Block internet until VPN connects (WireGuard)** for protection before networking starts.
 4. Enable **Connect VPN during boot** and complete Linux's authorization dialog.
 
@@ -310,12 +315,10 @@ The service connects before desktop login, after the network becomes available.
 The app opens separately when you sign into your desktop. Later boots do not need
 another password prompt.
 
-The location list waits while the boot connection is running. If DNS or the
-network is still becoming available, the app retries loading locations for up to
-three minutes instead of displaying a startup traceback. Connection status stays
-visible; persistent failures still show an error and can be retried with **Refresh**.
-Saved locations stay available while the live list refreshes, including when the
-VPN is connected with **VPN only** enabled but DNS or the catalog request fails.
+Saved locations appear immediately without an API request. Fetching a missing
+catalog or an explicit refresh waits for boot connection and firewall inspection.
+Transient network failures retry within a three-minute window. Saved locations
+remain usable if a manual refresh fails.
 
 Changing the main location controls does not change the saved boot connection.
 Use **Save current location for startup** to apply a new location, protocol or
@@ -382,9 +385,12 @@ authorization for each change. No global password-free sudo/Python rule is added
 
 ### Optional WireGuard kill switch
 
-**VPN only (WireGuard)** is off by default. Connect with WireGuard, then enable it
-in the top panel and authorize the firewall change. OpenVPN is not supported by
-this option. Existing firewall rules remain in place.
+**Block internet without VPN (WireGuard)** is selected by default. The selected
+setting is separate from the live protection status: opening the app does not
+change the firewall. **Connect** installs the block before connection setup,
+using the same Linux authorization. If an existing connection is unprotected,
+use **Reconnect** to apply the selected protection. An explicit opt-out is saved.
+OpenVPN requires unchecking this option; the app does not silently downgrade protection.
 
 While enabled, external IPv4 and IPv6 traffic must leave through CyberGhost,
 including container internet traffic. Direct external connections remain blocked
@@ -394,8 +400,15 @@ Internal addresses are IPv4 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and
 `169.254.0.0/16`, plus IPv6 `fc00::/7` and `fe80::/10`. Local forwarding requires
 both source and destination to be internal. Loopback, WireGuard's encrypted
 transport and essential DHCP/IPv6 neighbor discovery also remain allowed.
+DNS on TCP/UDP ports 53 and 853 must use the VPN or a loopback resolver; DNS to
+a LAN router is blocked because it can forward internet lookups outside the VPN.
+Other local services remain reachable. A trusted LAN proxy can still relay traffic;
+allowing local access cannot guarantee what another machine does with a request.
 It does not control privileged applications or separate network
 namespaces that manage their own network interfaces.
+Ordinary Docker bridge traffic traverses the host's forwarding rules, and host
+network containers use host output rules. Macvlan/ipvlan or separately routed
+interfaces require their own protection; they are not covered by this guarantee.
 
 Protection **stays enabled after Disconnect or Quit**, until you turn it off or
 reboot. Startup can reapply it after connecting or, with **Block internet until VPN
@@ -424,6 +437,12 @@ The firewall monitor exits when VPN only is disabled. No password or sudoers
 exception is stored. A custom polkit policy is installed only if you separately
 enable **Remember authorization** in Setup.
 
+After upgrading, save enabled Startup settings again to update the installed
+boot helpers. An already-running firewall monitor retains its loaded rules/code;
+the refreshed boot helpers apply the new policy on the next reboot.
+Older active helpers are reported as **unknown** until the updated helper is
+running, so the app cannot mistake their previous rules for the current policy.
+
 Keyboard shortcuts: **Ctrl+F** search, **F5** refresh, **Ctrl+Q** quit.
 
 Preferences are stored separately at
@@ -445,6 +464,7 @@ to regenerate them with demo data and no active VPN.
 /usr/bin/python3 tests/gui_setup.py
 /usr/bin/python3 tests/gui_startup_wait.py
 /usr/bin/python3 tests/gui_server_loading.py
+/usr/bin/python3 tests/gui_connection_policy.py
 /usr/bin/python3 tests/gui_i18n.py
 /usr/bin/python3 tests/gui_locale_store.py
 /usr/bin/python3 tests/gui_updates.py

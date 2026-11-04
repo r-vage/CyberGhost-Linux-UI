@@ -22,6 +22,8 @@ RUNTIME = Path("/run/cyberghost-desktop")
 TABLE = "cyberghost_desktop"
 OWNER = "CyberGhost Desktop VPN-only"
 INTERFACE = "cyberghost"
+POLICY_REVISION = 1  # Includes blocking DNS outside the tunnel, even to LAN resolvers.
+OLD_POLICY = "An older firewall helper is running. Save Startup settings if enabled, then reboot to load the current protection policy."
 SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 INTERNAL_IPV4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")
 INTERNAL_IPV6 = ("fc00::/7", "fe80::/10")
@@ -40,6 +42,9 @@ def ruleset(mark=None):
     # Internal destinations include LANs and Docker's host/proxy connections.
     # Forwarding requires BOTH endpoints to be internal: a private container
     # source alone must never exempt internet traffic from the VPN requirement.
+    # A LAN DNS resolver can forward external lookups outside the VPN. Keep
+    # conventional DNS/DoT/DoQ on the tunnel (or a loopback resolver); the
+    # isolated setup cgroup has its own temporary rule ahead of this chain.
     # Existing direct internet connections are deliberately not exempted.
     return f'''table inet {TABLE} {{
  comment "{OWNER}"
@@ -55,9 +60,10 @@ def ruleset(mark=None):
   type filter hook output priority 20; policy drop;
   oifname "lo" accept
   oifname "{INTERFACE}" accept
+{transport}  meta l4proto {{ tcp, udp }} th dport {{ 53, 853 }} drop
   ip daddr @internal_v4 accept
   ip6 daddr @internal_v6 accept
-{transport}  udp sport 68 udp dport 67 accept
+  udp sport 68 udp dport 67 accept
   ip6 daddr ff02::1:2 udp sport 546 udp dport 547 accept
   ip6 daddr {{ fe80::/10, ff02::/16 }} icmpv6 type {{ nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert }} accept
  }}
@@ -65,6 +71,7 @@ def ruleset(mark=None):
   type filter hook forward priority 20; policy drop;
   oifname "{INTERFACE}" accept
   iifname "{INTERFACE}" ct state established,related accept
+  meta l4proto {{ tcp, udp }} th dport {{ 53, 853 }} drop
   ip saddr @internal_v4 ip daddr @internal_v4 accept
   ip6 saddr @internal_v6 ip6 daddr @internal_v6 accept
  }}
@@ -147,6 +154,8 @@ class Firewall:
     def status(self):
         document = self.document()
         if document is None:
+            if self.expected is not None:
+                return GuardStatus("unknown", "The active firewall rules disappeared. Internet blocking cannot be verified.")
             return GuardStatus("off", "Off · direct internet access is allowed.")
         if self.expected is None or fingerprint(document) != self.expected:
             return GuardStatus("unknown", "Firewall rules changed. Protection cannot be verified; turn VPN only off and on again.")
@@ -168,11 +177,27 @@ def request(action, runtime=RUNTIME):
     if len(response) > 4096 or not response.endswith(b"\n"):
         raise RuntimeError("Incomplete firewall status response.")
     data = json.loads(response)
+    if not isinstance(data, dict):
+        raise RuntimeError("Invalid firewall status response.")
     if "error" in data:
         raise RuntimeError(data["error"])
     if data.get("state") not in {"on", "off", "unknown"} or not isinstance(data.get("detail"), str):
         raise RuntimeError("Invalid firewall status response.")
-    return GuardStatus(**data)
+    if action == "status-policy" and data["state"] == "on":
+        if type(data.get("policy_revision")) is not int or data["policy_revision"] != POLICY_REVISION:
+            return GuardStatus("unknown", OLD_POLICY)
+    return GuardStatus(data["state"], data["detail"])
+
+
+def policy_status(runtime=RUNTIME):
+    # Keep the original status payload compatible with older app processes.
+    # New clients ask explicitly for the policy revision; an older daemon
+    # rejects that action, so fall back only to distinguish off from legacy-on.
+    try:
+        return request("status-policy", runtime)
+    except RuntimeError:
+        status = request("status", runtime)
+        return GuardStatus("unknown", OLD_POLICY) if status.state == "on" else status
 
 
 def secure_runtime(runtime):
@@ -204,7 +229,7 @@ def serve(listener, firewall, runtime):
             connection.settimeout(3)
             try:
                 action = connection.makefile("rb").readline(65)
-                if action == b"status\n":
+                if action in {b"status\n", b"status-policy\n"}:
                     result = firewall.status()
                 elif action == b"disable\n" and peer_uid(connection) == 0:
                     result = firewall.disable()
@@ -219,6 +244,8 @@ def serve(listener, firewall, runtime):
                 else:
                     raise RuntimeError("This action requires administrator authorization.")
                 payload = asdict(result)
+                if action == b"status-policy\n":
+                    payload["policy_revision"] = POLICY_REVISION
             except Exception as error:
                 payload = {"error": str(error)}
             try:
@@ -240,7 +267,8 @@ def authorized_action(action, runtime=RUNTIME, firewall=None, *, _lock=None):
         if _lock is None:
             fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            return request(action, runtime)
+            result = request(action, runtime)
+            return policy_status(runtime) if result.state == "on" else result
         except (FileNotFoundError, ConnectionRefusedError):
             pass
         firewall = firewall or Firewall()

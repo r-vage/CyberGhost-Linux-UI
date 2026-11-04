@@ -159,7 +159,7 @@ class StartupDesktopTests(unittest.TestCase):
             self.assertTrue(manager.configure(Selection(country="DE"), True).enabled)
             self.assertFalse(manager.disable().enabled)
 
-    def test_boot_selection_requires_a_completed_boot_and_unchanged_profile(self):
+    def test_boot_selection_requires_a_destination_recorded_by_the_boot_runner(self):
         with tempfile.TemporaryDirectory() as directory:
             run = Mock(return_value=subprocess.CompletedProcess([], 0,
                        "MainPID=0\nJob=\nActiveState=active\nUnitFileState=enabled\n", ""))
@@ -172,8 +172,10 @@ class StartupDesktopTests(unittest.TestCase):
             report = manager.paths.runtime / "status.json"
             with patch("cyberghost_desktop.startup.read_profile", return_value=profile()):
                 self.assertIsNone(manager.inspect().boot_selection)
+                report.write_text(json.dumps({"state": "connected", "detail": "Existing connection"}))
+                self.assertIsNone(manager.inspect().boot_selection, "An existing tunnel has no verified saved destination")
                 for state in ("connecting", "failed", "connected"):
-                    report.write_text(json.dumps({"state": state, "detail": "Boot outcome"}))
+                    report.write_text(json.dumps({"state": state, "detail": "Boot outcome", "selection": profile()["selection"]}))
                     os.utime(report, ns=(2000, 2000))
                     expected = Selection(country="DE") if state == "connected" else None
                     self.assertEqual(manager.inspect().boot_selection, expected)
@@ -183,6 +185,8 @@ class StartupDesktopTests(unittest.TestCase):
                 run.return_value.stdout = "MainPID=0\nJob=\nActiveState=active\nUnitFileState=enabled\n"
                 # Saving a different destination prepares the next boot only.
                 os.utime(manager.paths.profile, ns=(3000, 3000))
+                self.assertEqual(manager.inspect().boot_selection, Selection(country="DE"))
+                report.write_text(json.dumps({"state": "connected", "selection": {"country": "--stop"}}))
                 self.assertIsNone(manager.inspect().boot_selection)
 
     def test_openvpn_cannot_enable_wireguard_guard(self):
@@ -191,6 +195,32 @@ class StartupDesktopTests(unittest.TestCase):
             with patch.object(manager, "_authorize") as authorize, self.assertRaises(CliError):
                 manager.configure(Selection(country="DE", protocol="openvpn"), True)
             authorize.assert_not_called()
+
+    def test_historical_success_does_not_hide_current_startup_problems(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Mock(return_value=subprocess.CompletedProcess([], 0,
+                       "MainPID=0\nJob=\nActiveState=active\nUnitFileState=disabled\n", ""))
+            entry, manager = self.fixtures(directory, run)
+            entry.commit(entry.stage())
+            manager.paths.profile.parent.mkdir(parents=True)
+            manager.paths.profile.write_text("placeholder")
+            manager.paths.runtime.mkdir(parents=True)
+            report = manager.paths.runtime / "status.json"
+            report.write_text(json.dumps({"state": "connected", "detail": "Previous success", "selection": profile()["selection"]}))
+            with patch("cyberghost_desktop.startup.read_profile", return_value=profile()):
+                self.assertIn("not enabled", manager.inspect().detail)
+                run.return_value.stdout = "MainPID=0\nJob=\nActiveState=failed\nUnitFileState=enabled\n"
+                state = manager.inspect()
+                self.assertIn("failed", state.detail)
+                self.assertIsNone(state.boot_selection)
+                run.return_value.stdout = "MainPID=0\nJob=\nActiveState=active\nUnitFileState=enabled\n"
+                entry.remove()
+                self.assertIn("desktop startup is missing", manager.inspect().detail)
+                for malformed in ("[]", "null", "42", '"bad"'):
+                    report.write_text(malformed)
+                    state = manager.inspect()
+                    self.assertFalse(state.running)
+                    self.assertIsNone(state.boot_selection)
 
 
 class StartupInstallTests(unittest.TestCase):
@@ -447,9 +477,10 @@ class BootRunnerTests(unittest.TestCase):
         self.assertEqual(output.call_args.args[1], "connected")
 
     def test_existing_connection_is_not_replaced(self):
-        calls, guard, _, errors = self.boot(initially=True)
+        calls, guard, output, errors = self.boot(initially=True)
         self.assertFalse(errors)
         self.assertFalse(any("--connect" in command for command, _ in calls))
+        self.assertIsNone(output.call_args.kwargs["selection"])
         guard.assert_not_called()
 
     def test_unverified_vpn_or_existing_guard_never_reconnects(self):

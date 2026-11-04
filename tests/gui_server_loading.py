@@ -64,17 +64,22 @@ with patch('cyberghost_desktop.app.ThreadPoolExecutor', return_value=ControlledE
         window.city.set_active_id('Frankfurt')
         stale = window._futures['servers']
         window.city.set_active_id('Berlin')
-        refresh = window._futures['servers']
-        assert [row[1] for row in picker.get_model()] == ['', 'berlin-1'], 'Show cached entries before the refresh returns'
-        assert picker.status_label.get_text() == 'Refreshing servers…'
+        assert window._futures['servers'] is stale, 'Revisiting a saved city must not refresh it'
+        assert [row[1] for row in picker.get_model()] == ['', 'berlin-1']
         picker.set_active_id('berlin-1')
         stale.set_result([Choice('frankfurt-1', 'Frankfurt 1')])
         pump()
-        assert picker.status_spinner.get_property('active'), 'A stale response must not clear the current loading state'
+        assert not picker.status_spinner.get_property('active')
+        assert [row[1] for row in picker.get_model()] == ['', 'berlin-1'], 'Discard the old city reply'
+        window._stale_choices.add(('servers', 'traffic', 'DE', 'Berlin'))
+        window._load_servers()
+        refresh = window._futures['servers']
+        assert picker.status_label.get_text() == 'Refreshing servers…'
         refresh.set_result([Choice('berlin-2', 'Berlin 2 · 30% load'), Choice('berlin-1', 'Berlin 1 · 50% load')])
         pump()
         assert picker.get_active_id() == 'berlin-1', 'Keep the user selection while updating load and order'
         assert len(picker.get_model()) == 3, 'Refreshing replaces rows instead of duplicating them'
+        window._stale_choices.add(('servers', 'traffic', 'DE', 'Berlin'))
         window._load_servers()
         window._futures['servers'].set_exception(CliError('Catalogue temporarily unavailable'))
         pump()
@@ -101,6 +106,7 @@ with patch('cyberghost_desktop.app.ThreadPoolExecutor', return_value=ControlledE
         assert window.city.get_active_id() == 'Frankfurt'
 
         window.city.set_active_id('Berlin')
+        window._load_servers()
         pending = window._futures['servers']
         window.city.set_active_id('')
         pending.set_result([Choice('stale', 'Stale')])

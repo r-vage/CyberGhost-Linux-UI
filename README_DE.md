@@ -380,10 +380,19 @@ passwortfreie sudo- oder Python-Regel hinzugefügt.
 
 ### Optionaler WireGuard-Kill-Switch
 
-**Nur VPN (WireGuard)** ist standardmäßig aus. Verbinde mit WireGuard, aktiviere
-dann die Option in der oberen Karte und autorisiere die Firewall-Änderung.
-OpenVPN wird von dieser Option nicht unterstützt. Vorhandene Firewall-Regeln
-bleiben bestehen.
+**Internet ohne VPN blockieren (WireGuard)** ist standardmäßig ausgewählt.
+Beim Öffnen der App wird die Firewall nicht verändert. **Verbinden** aktiviert
+die Sperre vor dem Verbindungsaufbau mit derselben Linux-Autorisierung. Bei einer
+bestehenden ungeschützten Verbindung übernimmt **Erneut verbinden** den Schutz.
+Das bewusste Ausschalten wird gespeichert. OpenVPN erfordert das Abwählen dieser
+Option; aktivierte Schutzoptionen werden nicht stillschweigend entfernt.
+
+Gespeicherte Länder, Städte und Server werden auch nach einem Neustart wiederverwendet.
+Fehlende Listen werden bei Bedarf geladen; **Aktualisieren/F5** erneuert gespeicherte Listen.
+DNS auf TCP/UDP-Port 53 und 853 muss über das VPN oder einen lokalen Loopback-Resolver
+laufen. Anfragen an den DNS-Server eines LAN-Routers sind gesperrt. Andere lokale
+Dienste bleiben erreichbar. Docker-Bridge- und Host-Netzwerke sind erfasst;
+Macvlan/Ipvlan mit eigenen externen Schnittstellen benötigen eigenen Schutz.
 
 Bei aktivem Schutz muss externer IPv4- und IPv6-Verkehr durch CyberGhost fließen,
 auch der Internetverkehr von Containern. Fällt der Tunnel aus, bleiben direkte
@@ -425,6 +434,11 @@ sudo nft delete table inet cyberghost_desktop
 Die Firewall-Überwachung endet beim Deaktivieren. Es wird weder ein Passwort noch
 eine sudoers-Ausnahme gespeichert. Eine eigene polkit-Regel wird nur installiert,
 wenn du **Autorisierung merken** gesondert aktivierst.
+
+Speichere nach einem Update die aktivierten Starteinstellungen erneut, um die
+installierten Helfer zu aktualisieren, und starte den Rechner neu. Ein laufender
+älterer Firewall-Helfer behält seine bisherigen Regeln und wird als **unbekannt**
+gemeldet, bis der aktuelle Helfer läuft.
 
 Tastenkürzel: **Strg+F** suchen, **F5** aktualisieren, **Strg+Q** beenden.
 Einstellungen, Sprache, Favoriten und zwischengespeicherte Standortlisten liegen

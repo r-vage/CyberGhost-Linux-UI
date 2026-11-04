@@ -6,7 +6,7 @@ import shutil
 import subprocess
 
 from .cli import CliError
-from .firewall import GuardStatus, RUNTIME, SYSTEM_PATH, request
+from .firewall import GuardStatus, RUNTIME, SYSTEM_PATH, policy_status
 
 
 class VPNGuard:
@@ -14,7 +14,7 @@ class VPNGuard:
 
     def status(self):
         try:
-            return request("status")
+            return policy_status()
         except (FileNotFoundError, ConnectionRefusedError):
             if (RUNTIME / "active").exists():
                 return GuardStatus("unknown", "Firewall monitor unavailable. Rules may still block traffic; turn VPN only off to recover.")

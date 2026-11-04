@@ -17,7 +17,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from cyberghost_desktop.firewall import Firewall, TABLE, authorized_action, request  # noqa: E402
+from cyberghost_desktop.firewall import Firewall, TABLE, authorized_action, policy_status, request  # noqa: E402
 from cyberghost_desktop.protected_connect import connection_rule, remove_exception  # noqa: E402
 
 
@@ -25,14 +25,14 @@ def run(*args, source=None):
     return subprocess.run(args, input=source, capture_output=True, text=True, check=True).stdout
 
 
-def send_datagram(address, *, mark=None, existing=None):
+def send_datagram(address, *, mark=None, existing=None, port=9999):
     family = socket.AF_INET6 if ":" in address else socket.AF_INET
     connection = existing or socket.socket(family, socket.SOCK_DGRAM)
     try:
         connection.settimeout(1)
         if mark is not None:
             connection.setsockopt(socket.SOL_SOCKET, socket.SO_MARK, mark)
-        connection.sendto(b"namespace test", (address, 9999))
+        connection.sendto(b"namespace test", (address, port))
     finally:
         if existing is None:
             connection.close()
@@ -79,11 +79,11 @@ for command in sys.stdin:
     elif command == "stop":
         break
     else:
-        address, *source = command.split()
+        address, port, *source = command.split()
         with socket.socket(socket.AF_INET6 if ':' in address else socket.AF_INET, socket.SOCK_DGRAM) as s:
             if source:
                 s.bind((source[0], 0))
-            s.sendto(b"forwarding test", (address, 9999))
+            s.sendto(b"forwarding test", (address, int(port)))
     print("ok", flush=True)
 '''
 
@@ -108,8 +108,12 @@ def inner(original_namespace):
     run("nft", "-f", "-", source='''table inet namespace_observer {
  counter before { }
  counter after { }
+ counter before_dns { }
+ counter after_dns { }
  chain before { type filter hook forward priority 0; policy accept; counter name before; }
  chain after { type filter hook forward priority 30; policy accept; counter name after; }
+ chain before_output { type filter hook output priority 0; policy accept; tcp dport { 53, 853 } counter name before_dns; }
+ chain after_output { type filter hook output priority 30; policy accept; tcp dport { 53, 853 } counter name after_dns; }
 }
 ''')
     peer = subprocess.Popen(["unshare", "--net", "/usr/bin/python3", "-u", "-c", PEER],
@@ -134,14 +138,25 @@ def inner(original_namespace):
         data = json.loads(run("nft", "-j", "list", "counter", "inet", "namespace_observer", name))
         return next(item["counter"]["packets"] for item in data["nftables"] if "counter" in item)
 
-    def forwarded(address, expected, source=None):
+    def forwarded(address, expected, source=None, port=9999):
         before, after = packets("before"), packets("after")
-        tell_peer(address + (" " + source if source else ""))
+        tell_peer(address + " " + str(port) + (" " + source if source else ""))
         deadline = time.monotonic() + 3
         while packets("before") == before and time.monotonic() < deadline:
             time.sleep(.01)
         assert packets("before") > before, "Test packet never entered the forwarding hook"
         assert (packets("after") > after) == expected, "Unexpected forwarding result"
+
+    def tcp_dns(address, port, expected):
+        # Count only the probe's traffic: delayed local TCP replies and IPv6
+        # neighbor discovery may legitimately pass while this probe is blocked.
+        family = socket.AF_INET6 if ':' in address else socket.AF_INET
+        before, after = packets('before_dns'), packets('after_dns')
+        with socket.socket(family, socket.SOCK_STREAM) as connection:
+            connection.settimeout(.2)
+            connection.connect_ex((address, port))
+        assert packets('before_dns') > before, 'The DNS TCP probe must reach the output hook'
+        assert (packets('after_dns') > after) == expected, 'Unexpected DNS TCP filtering result'
 
     def local_connections():
         for address in ('10.20.0.2', '192.168.50.2', '169.254.25.2', 'fd18::2'):
@@ -161,6 +176,13 @@ def inner(original_namespace):
         # Private sources must not exempt an external destination from the kill switch.
         forwarded('198.18.0.2', False)
         forwarded('2001:db8:18::2', False)
+        # A router's private DNS address must not bypass VPN DNS privacy.
+        # Ordinary local services still pass the assertions above.
+        for address in ('192.168.50.2', 'fd18::2'):
+            for port in (53, 853):
+                blocked(address, port=port)
+                forwarded(address, False, port=port)
+                tcp_dns(address, port, False)
 
     with tempfile.TemporaryDirectory(prefix="cyberghost-ns-") as directory:
         runtime = Path(directory) / "runtime"
@@ -192,6 +214,7 @@ def inner(original_namespace):
                 assert result.state == "on"
                 assert runtime.stat().st_mode & 0o777 == 0o755
                 assert request("status", runtime).state == "on"
+                assert policy_status(runtime).state == "on", "The running monitor must verify the current policy revision"
                 blocked("198.18.0.2", existing=existing)
                 blocked("198.18.0.2")
                 blocked("2001:db8:18::2")
@@ -230,6 +253,9 @@ def inner(original_namespace):
             run("ip", "-6", "route", "add", "2001:db8:51::/64", "dev", "cyberghost")
             send_datagram("198.51.100.2")
             send_datagram("2001:db8:51::2")
+            for address in ("198.51.100.2", "2001:db8:51::2"):
+                send_datagram(address, port=53)
+                forwarded(address, True, port=53)
             forwarded("198.51.100.2", True)
             forwarded("2001:db8:51::2", True)
             run("ip", "link", "del", "cyberghost")
@@ -259,6 +285,15 @@ def inner(original_namespace):
             blocked("198.18.0.2")
             blocked("2001:db8:18::2")
             assert request("status", runtime).state == "on", "Removing the exception must restore the original rules"
+            run("nft", "delete", "table", "inet", TABLE)
+            assert policy_status(runtime).state == "unknown", "Disappearing active rules are not an explicit opt-out"
+            for address in ('192.168.50.2', 'fd18::2'):
+                for port in (53, 853):
+                    tcp_dns(address, port, True)
+            assert authorized_action("block", runtime).state == "on"
+            blocked("198.18.0.2")
+            blocked("2001:db8:18::2")
+            local_connections()
             assert authorized_action("disable", runtime).state == "off"
             send_datagram("198.18.0.2")
             send_datagram("2001:db8:18::2")

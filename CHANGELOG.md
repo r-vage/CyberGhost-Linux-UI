@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.9 — 2026-11-04
+
+- Rename the main protection control to **Block internet without VPN** and enable it by default for new WireGuard connections. Install the traffic block before manual connection setup; retain it after failures, Disconnect and Quit. Keep the selected preference separate from verified firewall status, preserve explicit opt-outs, and require an explicit choice before saving unprotected OpenVPN startup settings.
+- Reuse saved country, city and server lists across launches and category changes. Fetch missing lists on demand and refresh saved data with Refresh/F5; preserve selections and saved entries on failure. Defer network requests while boot or firewall state is unverified.
+- Verify the actual interface and IPv4 route even when the CLI reports WireGuard connected. Record a boot destination only when the boot runner made that connection, so a pre-existing VPN is not mislabeled as the saved startup target.
+- Block DNS, DNS-over-TLS and DNS-over-QUIC on ports 53/853 outside the tunnel, including requests to LAN resolvers. Preserve loopback DNS, isolated VPN setup and other local LAN/Docker services. Clarify the boundary for local proxies and Docker networks with their own external interfaces.
+- Explain why startup blocking is unavailable with an OpenVPN selection and why early blocking also selects protection after connection. Keep both controls disabled when systemd is unavailable. Show current startup configuration failures even when the last boot report records success, and tolerate malformed preference values and boot status reports.
+- Report disappeared active firewall rules as unverified protection. Check the running monitor's policy revision so an older helper cannot report the current protection as verified; preserve the original status format for older app processes. Existing installed boot helpers must be refreshed by saving Startup settings, followed by a reboot to load the updated monitor.
+- Translate the new controls and warnings in all 15 languages and extend the GTK, startup, connection-policy and isolated kernel checks.
+
 ## 0.1.8 — 2026-11-03
 
 - Allow private IPv4 and IPv6 local networks, link-local addresses and local Docker connections while VPN-only protection is enabled, including before boot connection and after tunnel loss. Keep direct external traffic blocked and require both endpoints of a local forwarded connection to be internal.

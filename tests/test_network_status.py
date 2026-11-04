@@ -81,12 +81,17 @@ class NetworkStatusTests(unittest.TestCase):
         self.assertEqual(status.state, "unknown")
         self.assertIn("iproute2", status.detail)
 
-    def test_existing_openvpn_and_wireguard_cli_status_are_preserved(self):
-        for message in ("VPN connection found.", "Wireguard connection found."):
-            with self.subTest(message=message):
-                status, run = self.check([result(message)])
-                self.assertEqual(status.state, "connected")
-                self.assertEqual(run.call_count, 1)
+    def test_existing_openvpn_cli_status_is_preserved(self):
+        status, run = self.check([result("VPN connection found.")])
+        self.assertEqual(status.state, "connected")
+        self.assertEqual(run.call_count, 1)
+
+    def test_positive_wireguard_status_also_requires_interface_and_route(self):
+        for links, routes, expected in (([ACTIVE_LINK], [ACTIVE_ROUTE], "connected"),
+                                        ([ACTIVE_LINK], [{"dev": "eno1"}], "unknown"), ([], [], "unknown")):
+            with self.subTest(links=links, routes=routes):
+                status, _ = self.check([result("Wireguard connection found."), result(links), result(routes)])
+                self.assertEqual(status.state, expected)
 
     def test_interface_removal_does_not_reuse_previous_success(self):
         run = Mock(side_effect=[result("No VPN connections found."), result([ACTIVE_LINK]), result([ACTIVE_ROUTE]),

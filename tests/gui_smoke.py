@@ -102,7 +102,10 @@ try:
     assert not window.connect_button.get_sensitive()
     assert not window.setup_button.get_sensitive()
     assert window.guard_state.state == "off" and not app.guard.enabled
-    assert not window.guard_toggle.get_sensitive()
+    assert window.guard_toggle.get_sensitive() and window.guard_toggle.get_active()
+    assert "Not active yet" in window.guard_label.get_text()
+    window.guard_toggle.set_active(False)  # Exercise the explicit unprotected/OpenVPN path below.
+    assert not window.preferences.data["vpn_only"] and not window.control_busy
     assert not window.startup_state.enabled
     assert not window.startup_toggle.get_sensitive()
     assert window.before_ip_label.get_text() == "203.0.113.42"
@@ -130,8 +133,15 @@ try:
     assert window.startup_state.vpn_only
     assert window.startup_state.selection.country == "DE"
     assert not window.startup_state.block_until_connected
+    window.protocol.set_active_id("openvpn")
+    assert not window.startup_block.get_sensitive()
+    assert "requires WireGuard" in window.startup_option_note.get_text()
+    assert window.startup_state.selection.protocol == "wireguard", "Main selection does not change the saved boot profile"
+    window.protocol.set_active_id("wireguard")
+    assert window.startup_block.get_sensitive()
     window.startup_block.set_active(True)
     assert window.startup_guard.get_active() and not window.startup_guard.get_sensitive()
+    assert "after VPN loss" in window.startup_option_note.get_text()
     window.startup_save.emit("clicked")
     until(lambda: window.startup_state.block_until_connected and not window.control_busy)
     assert not window.client.connected, "Early protection is saved for the next boot"
@@ -143,7 +153,13 @@ try:
         window.startup_expander.set_expanded(False)
         window.resize(1080, 780)
     window.protocol.set_active_id("openvpn")
-    assert not window.startup_block.get_sensitive()
+    assert window.startup_block.get_sensitive(), "Protection must be explicitly cleared; never silently downgrade it"
+    window.startup_save.emit("clicked")
+    until(lambda: not window.control_busy)
+    assert window.startup_state.selection.protocol == "wireguard"
+    window.startup_block.set_active(False)
+    window.startup_guard.set_active(False)
+    assert not window.startup_block.get_sensitive() and not window.startup_guard.get_sensitive()
     window.startup_save.emit("clicked")
     until(lambda: window.startup_state.selection.protocol == "openvpn" and not window.control_busy)
     assert not window.startup_state.vpn_only
@@ -161,6 +177,10 @@ try:
     app.startup.state = StartupState()
     window.refresh_startup()
     window.protocol.set_active_id("wireguard")
+    window._apply_startup(StartupState(True, available=False, vpn_only=True, block_until_connected=True), reset_form=True)
+    assert window.startup_block.get_active() and window.startup_guard.get_active()
+    assert not window.startup_block.get_sensitive() and not window.startup_guard.get_sensitive()
+    window._apply_startup(StartupState(), reset_form=True)
     window._apply_status(Status("unknown", "Cannot verify WireGuard status"))
     icon_state("unknown", "Status unknown")
     assert not window.connect_button.get_sensitive(), "Unknown status must not invite repeated reconnects"

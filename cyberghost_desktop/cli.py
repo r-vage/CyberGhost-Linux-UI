@@ -239,13 +239,17 @@ class CyberGhostClient:
 
     def status(self) -> Status:
         status = parse_status(self._call(["--status"]))
-        if status.state == "connected":
+        if status.state == "connected" and not re.search(r"\bwireguard\b", status.detail, re.I):
             return status
         # CLI 1.5.0 runs `wg show` and treats its permission failure as no VPN.
         # Reading link state and a local route lookup needs no elevation, does not
         # send packets, and works after reopening the UI without cached success.
         wireguard = self._wireguard_status()
-        return wireguard if wireguard is not None else status
+        if wireguard is not None:
+            return wireguard
+        if status.state == "connected":
+            return Status("unknown", "CyberGhost reported WireGuard connected, but its interface could not be verified.")
+        return status
 
     def _ip_json(self, ip: str, args: list[str]) -> list[dict]:
         result = self.run([ip, "-j", *args], capture_output=True, text=True, errors="replace",

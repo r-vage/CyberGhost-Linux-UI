@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 from cyberghost_desktop.cli import CliError
 from cyberghost_desktop.firewall import (Firewall, GuardStatus, INTERNAL_IPV4, INTERNAL_IPV6,
-                                       OWNER, TABLE, fingerprint, ruleset, authorized_action, serve)
+                                       OWNER, TABLE, POLICY_REVISION, fingerprint, ruleset, authorized_action, serve,
+                                       request, policy_status)
 from cyberghost_desktop.vpn_guard import DemoGuard, VPNGuard
 
 
@@ -21,6 +22,41 @@ def document(handle=1, policy="drop", owner=OWNER):
 
 
 class FirewallTests(unittest.TestCase):
+    def test_disappearing_active_rules_are_not_an_ordinary_opt_out(self):
+        firewall = Firewall()
+        firewall.expected = "previously verified"
+        with patch.object(firewall, "document", return_value=None):
+            status = firewall.status()
+            self.assertEqual(status.state, "unknown")
+            self.assertIn("disappeared", status.detail)
+            firewall.disable()
+            self.assertEqual(firewall.status().state, "off", "Explicit disable clears the expected active state")
+
+    def test_only_current_policy_can_report_verified_protection(self):
+        for revision in (None, 0, "1", True, POLICY_REVISION):
+            with self.subTest(revision=revision):
+                connection = MagicMock()
+                payload = {"state": "on", "detail": "Protected"}
+                if revision is not None:
+                    payload["policy_revision"] = revision
+                connection.makefile.return_value = BytesIO(json.dumps(payload).encode() + b"\n")
+                with (patch("cyberghost_desktop.firewall.socket.socket") as socket_factory,
+                      patch("cyberghost_desktop.firewall.peer_uid", return_value=0)):
+                    socket_factory.return_value.__enter__.return_value = connection
+                    status = request("status-policy", Path("/unused"))
+                current = type(revision) is int and revision == POLICY_REVISION
+                self.assertEqual(status.state, "on" if current else "unknown")
+
+    def test_legacy_monitor_is_checked_without_changing_its_rules(self):
+        for state in ("on", "off", "unknown"):
+            with self.subTest(state=state), patch("cyberghost_desktop.firewall.request", side_effect=[
+                    RuntimeError("This action requires administrator authorization."), GuardStatus(state, "Legacy")]) as call:
+                status = policy_status(Path("/unused"))
+                self.assertEqual(status.state, "unknown" if state == "on" else state)
+                self.assertEqual([item.args[0] for item in call.call_args_list], ["status-policy", "status"])
+                if state == "on":
+                    self.assertIn("older firewall helper", status.detail)
+
     def test_internal_scope_includes_lan_and_docker_but_excludes_public_addresses(self):
         networks = [ip_network(value) for value in (*INTERNAL_IPV4, *INTERNAL_IPV6)]
         for value in ('10.20.0.2', '172.17.0.2', '172.31.255.254', '192.168.1.5',
@@ -48,7 +84,7 @@ class FirewallTests(unittest.TestCase):
         source = ruleset()
         self.assertEqual(source.count('policy drop'), 2)
         self.assertNotIn('meta mark', source)
-        self.assertNotIn('dport 53', source)
+        self.assertIn('th dport { 53, 853 } drop', source)
         self.assertNotIn('ct state established', source.split('chain forward')[0])
         self.assertIn('udp sport 68 udp dport 67 accept', source)
         self.assertIn('udp sport 546 udp dport 547 accept', source)
@@ -77,7 +113,7 @@ class FirewallTests(unittest.TestCase):
         with patch.object(firewall, "document", return_value=document(policy="accept")):
             self.assertEqual(firewall.status().state, "unknown")
         with patch.object(firewall, "document", return_value=None):
-            self.assertEqual(firewall.status().state, "off")
+            self.assertEqual(firewall.status().state, "unknown")
 
     def test_foreign_table_is_not_deleted(self):
         firewall = Firewall()
@@ -137,7 +173,7 @@ class FirewallTests(unittest.TestCase):
             self.assertFalse((runtime / "active").exists())
 
     def test_socket_allows_unprivileged_status_but_never_mutation(self):
-        for action in ("status", "enable", "block", "disable", "run command"):
+        for action in ("status", "status-policy", "enable", "block", "disable", "run command"):
             with self.subTest(action=action):
                 server = MagicMock()
                 server.makefile.return_value = BytesIO(action.encode() + b"\n")
@@ -148,8 +184,9 @@ class FirewallTests(unittest.TestCase):
                 with patch("cyberghost_desktop.firewall.peer_uid", return_value=1000), self.assertRaises(StopIteration):
                     serve(listener, firewall, Path("/unused"))
                 result = json.loads(server.sendall.call_args.args[0])
-                if action == "status":
+                if action in {"status", "status-policy"}:
                     self.assertEqual(result["state"], "off")
+                    self.assertEqual("policy_revision" in result, action == "status-policy")
                 else:
                     self.assertIn("authorization", result["error"])
                 firewall.enable.assert_not_called()
@@ -160,14 +197,14 @@ class GuardClientTests(unittest.TestCase):
     def test_monitor_missing_is_off_only_if_no_activation_marker(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("cyberghost_desktop.vpn_guard.RUNTIME", root), patch("cyberghost_desktop.vpn_guard.request", side_effect=FileNotFoundError):
+            with patch("cyberghost_desktop.vpn_guard.RUNTIME", root), patch("cyberghost_desktop.vpn_guard.policy_status", side_effect=FileNotFoundError):
                 guard = VPNGuard()
                 self.assertEqual(guard.status().state, "off")
                 (root / "active").touch()
                 self.assertEqual(guard.status().state, "unknown")
 
     def test_unverifiable_status_is_never_protected_or_disconnected(self):
-        with patch("cyberghost_desktop.vpn_guard.request", side_effect=TimeoutError):
+        with patch("cyberghost_desktop.vpn_guard.policy_status", side_effect=TimeoutError):
             self.assertEqual(VPNGuard().status().state, "unknown")
 
     def test_polkit_fixed_action_with_isolated_python_and_no_root_environment(self):
@@ -215,7 +252,7 @@ class GuardClientTests(unittest.TestCase):
                 VPNGuard().change(False)
 
     def test_demo_never_reads_runtime_or_invokes_commands(self):
-        with patch("cyberghost_desktop.vpn_guard.request", side_effect=AssertionError("real status")), \
+        with patch("cyberghost_desktop.vpn_guard.policy_status", side_effect=AssertionError("real status")), \
                 patch("cyberghost_desktop.vpn_guard.subprocess.run", side_effect=AssertionError("real command")):
             guard = DemoGuard()
             self.assertEqual(guard.status().state, "off")

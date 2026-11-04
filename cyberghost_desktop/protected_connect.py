@@ -198,16 +198,28 @@ def protected_connect(selection, account, *, runtime=firewall.RUNTIME, replace_e
     unshare = system_tool('unshare')
     system_tool('mount')
     system_tool('nsenter')
-    resolvers = direct_resolvers()
     firewall.secure_runtime(runtime)
     descriptor = os.open(runtime / 'action.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if firewall.request('status', runtime).state != 'on':
-            raise RuntimeError('VPN-only protection could not be verified. Refresh its status before reconnecting.')
         guard = firewall.Firewall()
+        status = firewall.GuardStatus('unknown', 'Firewall monitor unavailable. Rules may still block traffic; turn VPN only off to recover.')
+        try:
+            status = firewall.policy_status(runtime)
+            state = status.state
+        except (FileNotFoundError, ConnectionRefusedError):
+            state = 'off' if guard.document() is None else 'unknown'
+        if state == 'off':
+            # A first connection needs the same protection as a reconnect.
+            # Install the block before DNS setup or disconnecting an old VPN;
+            # any subsequent failure leaves ordinary internet traffic blocked.
+            status = firewall.authorized_action('block', runtime, _lock=lock.fileno())
+            state = status.state
+        if state != 'on':
+            raise RuntimeError('VPN-only protection could not be verified. ' + status.detail)
         if guard.document() is None:
             raise RuntimeError('VPN-only rules are missing; connection was not started.')
+        resolvers = direct_resolvers()
         with connection_group() as group, tempfile.TemporaryDirectory(prefix='connect-', dir=runtime) as temporary:
             job = Path(temporary)
             config = {'group': group.name, 'parent': os.getpid(), 'binary': binary, 'args': args,

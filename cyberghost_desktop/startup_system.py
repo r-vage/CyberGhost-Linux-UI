@@ -331,8 +331,11 @@ def remove_profile(paths, *, control=systemctl):
     control("daemon-reload")
 
 
-def outcome(paths, state, detail):
-    write(paths.runtime / "status.json", json.dumps({"state": state, "detail": detail}) + "\n")
+def outcome(paths, state, detail, *, selection=None):
+    report = {"state": state, "detail": detail}
+    if selection is not None:
+        report["selection"] = asdict(selection)
+    write(paths.runtime / "status.json", json.dumps(report) + "\n")
     print(detail, flush=True)
 
 
@@ -370,6 +373,7 @@ def boot_connect(paths, *, run=subprocess.run, sleep=time.sleep, now=time.monoto
         return run(command, **kwargs)
 
     client = cli.CyberGhostClient(binary, run=invoke)
+    connected_selection = None
     firewall = adapter("firewall", paths.library)
     strict = profile.get("block_until_connected", False)
     if strict:
@@ -428,6 +432,7 @@ def boot_connect(paths, *, run=subprocess.run, sleep=time.sleep, now=time.monoto
                     raise RuntimeError("CyberGhost reported a connection, but its WireGuard internet route could not be verified.")
             if status.state != "connected":
                 raise RuntimeError(f"Startup VPN could not verify a connection (CLI exit {result_code}). Connect manually from the app.")
+            connected_selection = selection
     if profile.get("vpn_only") or strict:
         if selection.protocol != "wireguard":
             raise RuntimeError("Saved VPN-only startup settings require WireGuard.")
@@ -435,7 +440,8 @@ def boot_connect(paths, *, run=subprocess.run, sleep=time.sleep, now=time.monoto
         protection = firewall.authorized_action("enable")
         if protection.state != "on":
             raise RuntimeError("The VPN connected, but VPN-only protection could not be verified.")
-    outcome(paths, "connected", "Startup VPN connected." + (" VPN-only protection is enabled." if profile.get("vpn_only") or strict else ""))
+    outcome(paths, "connected", "Startup VPN connected." + (" VPN-only protection is enabled." if profile.get("vpn_only") or strict else ""),
+            selection=connected_selection)
 
 
 def main():

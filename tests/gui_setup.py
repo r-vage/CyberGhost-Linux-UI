@@ -148,6 +148,10 @@ with (patch("cyberghost_desktop.app.inspect_installation", side_effect=lambda: s
         assert client.binary == state.cli, "CLI must be redetected without an app restart"
         assert dialog.account_button.get_sensitive()
         assert dialog.account_status.get_text() == "Account setup needed"
+        with patch.object(client, "locations", side_effect=AssertionError("Finish account setup before querying catalogs")):
+            window.refresh_locations()
+            controlled.drain()
+        assert window.location_count.get_text() == "CLI setup required"
 
         dialog.account_button.emit("clicked")
         assert dialog.busy

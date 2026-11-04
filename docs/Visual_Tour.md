@@ -58,8 +58,9 @@ test. These screenshots show simulated demo values, not a real speed measurement
 
 ![Connected panel with public IPv4 comparison, Start/Stop ping, compact VPN-only checkbox and matching button heights](tour/connection.png)
 
-Enable **VPN only (WireGuard)** after connecting to block direct internet and
-LAN traffic outside the tunnel. Protection remains on after **Disconnect** or
+The control is now named **Block internet without VPN (WireGuard)** and selected
+by default. Connect activates protection before setup. External traffic must use
+the VPN; local LAN/Docker services remain accessible. Protection remains on after **Disconnect** or
 **Quit**, until disabled or rebooted. You can reconnect or change WireGuard
 servers while it remains enabled.
 Only the checkbox and its label are clickable; empty space beside it does not

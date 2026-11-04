@@ -4,10 +4,42 @@ import tempfile
 import unittest
 
 from cyberghost_desktop.preferences import Preferences
-from cyberghost_desktop.cli import Location
+from cyberghost_desktop.cli import Choice, Location
 
 
 class PreferenceTests(unittest.TestCase):
+    def test_internet_blocking_defaults_on_and_explicit_opt_out_survives_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            prefs = Preferences(path)
+            self.assertTrue(prefs.data["vpn_only"])
+            prefs.data["vpn_only"] = False
+            prefs.save()
+            self.assertFalse(Preferences(path).data["vpn_only"])
+            path.write_text('{"vpn_only": "false"}')
+            self.assertTrue(Preferences(path).data["vpn_only"])
+
+    def test_saved_city_and_server_lists_survive_restart_including_empty_responses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            prefs = Preferences(path)
+            cities = [Choice("Berlin", "Berlin · 20 servers")]
+            servers = [Choice("berlin-1", "berlin-1 · 40% load", 40)]
+            prefs.remember_choices(("traffic", "DE"), cities)
+            prefs.remember_choices(("servers", "traffic", "DE", "Berlin"), servers)
+            prefs.remember_choices(("torrent", "FR"), [])
+            prefs.save()
+            self.assertEqual(Preferences(path).choice_cache(), {
+                ("traffic", "DE"): cities, ("servers", "traffic", "DE", "Berlin"): servers, ("torrent", "FR"): []})
+            prefs.data["choice_catalogues"]['["traffic","--stop"]'] = []
+            prefs.data["choice_catalogues"]['["traffic","FR"]'] = [{"value": "--stop", "label": "Bad", "load": None}]
+            prefs.data["choice_catalogues"]['["traffic",null]'] = []
+            prefs.save()
+            cache = Preferences(path).choice_cache()
+            self.assertEqual(len(cache), 3)
+            prefs.data["last_location"] = "traffic:DE:"
+            self.assertFalse(prefs.has_locations("traffic"), "A single saved country is not a complete catalog")
+
     def test_only_preferences_are_persisted_and_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings/preferences.json"
@@ -51,6 +83,18 @@ class PreferenceTests(unittest.TestCase):
                 path.write_text(text)
                 self.assertEqual(Preferences(path).data["favorites"], [])
                 self.assertEqual(Preferences(path).data["protocol"], "wireguard")
+
+    def test_malformed_option_types_do_not_prevent_opening_the_app(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            for key in ("mode", "protocol", "transport"):
+                for value in ([], {}, None, 123):
+                    with self.subTest(key=key, value=value):
+                        path.write_text(json.dumps({key: value, "vpn_only": False, "favorites": ["traffic:DE:"]}))
+                        prefs = Preferences(path)
+                        self.assertEqual(prefs.data[key], {"mode": "traffic", "protocol": "wireguard", "transport": "UDP"}[key])
+                        self.assertFalse(prefs.data["vpn_only"], "Keep valid explicit preferences")
+                        self.assertEqual(prefs.data["favorites"], ["traffic:DE:"])
 
 
 if __name__ == "__main__":

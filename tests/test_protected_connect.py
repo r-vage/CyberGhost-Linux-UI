@@ -14,6 +14,38 @@ from cyberghost_desktop.firewall import GuardStatus, TABLE, fingerprint
 
 
 class ReconnectTests(unittest.TestCase):
+    def test_first_connection_blocks_before_dns_and_stays_blocked_on_failure(self):
+        for failure in ("dns", "isolation"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                runtime = Path(directory)
+                guard = Mock()
+                guard.document.side_effect = [None, {"nftables": []}]
+                events = []
+
+                def block(action, *_args, **_kwargs):
+                    events.append(action)
+                    return GuardStatus("on", "Blocked")
+
+                def dns():
+                    self.assertEqual(events, ["block"], "The block must precede resolver setup")
+                    if failure == "dns":
+                        raise RuntimeError("No resolver")
+                    return "nameserver 192.0.2.53\n"
+
+                with (patch.object(reconnect, "system_tool", side_effect=lambda name: "/usr/bin/" + name),
+                      patch.object(reconnect.firewall, "secure_runtime"),
+                      patch.object(reconnect.firewall, "request", side_effect=FileNotFoundError),
+                      patch.object(reconnect.firewall, "Firewall", return_value=guard),
+                      patch.object(reconnect.firewall, "authorized_action", side_effect=block),
+                      patch.object(reconnect, "direct_resolvers", side_effect=dns),
+                      patch.object(reconnect, "connection_group", side_effect=RuntimeError("No isolation")),
+                      patch.object(reconnect, "run_connection") as launch,
+                      self.assertRaises(RuntimeError)):
+                    reconnect.protected_connect(Selection(country="DE"), SimpleNamespace(), runtime=runtime)
+                self.assertEqual(events, ["block"])
+                launch.assert_not_called()
+                guard.disable.assert_not_called()
+
     def test_one_authorization_for_connection_with_protection(self):
         run = Mock(return_value=subprocess.CompletedProcess([], 0, 'Connected; protection remains enabled.', ''))
         client = CyberGhostClient('/usr/bin/cyberghostvpn', run=run)
@@ -209,17 +241,20 @@ class ReconnectTests(unittest.TestCase):
                     self.assertFalse(list(runtime.glob('connect-*')))
 
     def test_unknown_guard_never_launches_connection(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with (patch.object(reconnect, 'system_tool', return_value='/unused'),
-                  patch.object(reconnect, 'direct_resolvers', return_value='nameserver 192.0.2.53\n'),
-                  patch.object(reconnect.firewall, 'secure_runtime'),
-                  patch.object(reconnect.firewall, 'request', return_value=GuardStatus('unknown', 'Cannot verify')),
-                  patch.object(reconnect, 'connection_group') as group,
-                  patch.object(reconnect, 'run_connection') as run,
-                  self.assertRaisesRegex(RuntimeError, 'could not be verified')):
-                reconnect.protected_connect(Selection(country='DE'), SimpleNamespace(), runtime=Path(directory))
-            group.assert_not_called()
-            run.assert_not_called()
+        for detail in ('Cannot verify', reconnect.firewall.OLD_POLICY):
+            with self.subTest(reason=detail), tempfile.TemporaryDirectory() as directory:
+                with (patch.object(reconnect, 'system_tool', return_value='/unused'),
+                      patch.object(reconnect, 'direct_resolvers') as resolvers,
+                      patch.object(reconnect.firewall, 'secure_runtime'),
+                      patch.object(reconnect.firewall, 'policy_status', return_value=GuardStatus('unknown', detail)),
+                      patch.object(reconnect, 'connection_group') as group,
+                      patch.object(reconnect, 'run_connection') as run,
+                      self.assertRaisesRegex(RuntimeError, 'could not be verified') as error):
+                    reconnect.protected_connect(Selection(country='DE'), SimpleNamespace(), runtime=Path(directory))
+                self.assertIn(detail, str(error.exception))
+                resolvers.assert_not_called()
+                group.assert_not_called()
+                run.assert_not_called()
 
     def test_new_wireguard_transport_is_allowed_before_cli_finishes(self):
         process = MagicMock()

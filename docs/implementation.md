@@ -25,7 +25,15 @@ The UI uses background workers, separate status and catalog requests, bounded
 read timeouts, and request tokens. Old country/server/status results cannot replace
 newer selections or a later connection action. Unstarted obsolete requests are
 cancelled. Errors are visible, and the CLI's result is available in Activity.
-Location requests wait for startup inspection and any running boot connection.
+Saved countries, cities and servers are reused across launches and category
+changes. Missing catalogs are fetched on demand; only explicit Refresh/F5 marks
+saved catalogs for replacement. A manual refresh retains the selected city/server
+and keeps old entries on failure. The persistent choice cache validates its keys
+and records and is bounded to 64 lists, each with up to 3,000 choices. A legacy
+single-country fallback is not mistaken for a complete country catalog.
+Network catalog requests wait for startup inspection and any running boot
+connection, as well as a known firewall state. Saved choices remain usable while
+those checks run, without starting API requests.
 Known DNS/connection exceptions and catalog timeouts retry every three seconds
 within a three-minute window, without blocking status checks or repeating VPN
 commands. Saved catalogs appear while live requests are pending, even with a
@@ -48,7 +56,7 @@ Connection status comes from `--status` and read-only Linux interface/routing
 checks, never from a successful connect command, a selected location, or a cached
 preference. CLI 1.5.0 runs `wg show` internally and incorrectly reports no VPN when
 the normal user cannot read WireGuard's privileged peer details. If the CLI does
-not report a connection, the app queries `ip -j -details link show type wireguard`
+not report a connection, or reports WireGuard connected, the app queries `ip -j -details link show type wireguard`
 and checks the exact `cyberghost` interface's UP flag. WireGuard's usual UNKNOWN
 operstate is not treated as a failure. An IPv4 `ip route get 1.1.1.1` lookup must
 also resolve through that interface; this only reads the kernel's routing tables
@@ -59,8 +67,9 @@ describes the detected tunnel/routing state, not an independent handshake or lea
 
 While connected, the action is labeled Reconnect and compares the selected
 destination with the last connection requested through the app. For boot connections,
-a completed current-boot report also supplies that comparison when the startup
-profile has not changed since the report. A fresh live connection check must confirm
+a completed current-boot report records the destination only when the boot runner
+actually made the connection. An already-existing VPN has no inferred destination.
+A fresh live connection check must confirm
 the tunnel before the comparison becomes active; the boot report never sets VPN
 status itself. A later saved startup profile only affects the next boot. Unknown
 external selections remain explicitly reconnectable.
@@ -256,12 +265,18 @@ The main layout uses a horizontal GTK Paned: the left pane does not resize with
 the window, while the right pane does. The divider remains adjustable. Combo box
 text ellipsizes instead of forcing large minimum widths for long server names.
 
-## Optional WireGuard kill switch
+## WireGuard internet blocking
 
 The normal-user client calls `/usr/bin/python3 -I firewall.py enable|disable`
-through pkexec only on an explicit toggle. The isolated helper uses standard
+through pkexec on an explicit toggle. **Block internet without VPN** is requested
+by default for manual WireGuard connections; the preference is not evidence of
+active protection. The UI shows “Not active yet” until actual firewall state is
+verified. Connect uses one authorized helper to install the block before DNS
+setup or disconnecting an existing tunnel. Later setup failures retain it.
+An explicit opt-out is persisted; starting the UI never changes the firewall.
+The isolated helper uses standard
 library imports, fixed action names and tools found in trusted system directories.
-There is no general command runner, custom polkit policy or automatic activation.
+There is no general command runner or activation merely from opening the app.
 The helper validates CyberGhost's exact WireGuard interface, UP flag, default
 IPv4 route and current nonzero firewall mark before enabling. It never reads
 WireGuard private keys or the CyberGhost account file.
@@ -281,7 +296,54 @@ traffic from the tunnel must be established or related. Established direct
 external output connections are deliberately not exempted. The local policy
 applies with no tunnel, during VPN use and after tunnel loss; services on private
 addresses remain reachable even when those services themselves relay requests.
+Before the private-address allowance, TCP/UDP destination ports 53 and 853 are
+dropped outside the VPN. This closes the LAN-router DNS exception; loopback DNS,
+VPN DNS and the isolated setup cgroup still work. A loopback resolver's upstream
+queries must also follow the VPN. Conventional DNS to a LAN-only resolver is
+blocked; other local services remain allowed.
+Local HTTPS proxies and resolvers on nonstandard ports remain part of the trusted
+LAN exception: this firewall cannot identify the remote behavior of another host.
 Both IP versions are covered; disappearing/recreated interfaces are matched by name.
+
+Ordinary Docker bridge traffic uses the host forward hook, while host-network
+containers use host output. Docker's earlier ACCEPT verdict cannot bypass this
+table's later DROP policy; its other firewall rules can still deny traffic that
+this table allows. See [Docker's nftables documentation](https://docs.docker.com/engine/network/firewall-nftables/).
+Macvlan/ipvlan and interfaces moved into independent namespaces need separate
+protection: [macvlan connects directly to the physical network](https://docs.docker.com/engine/network/drivers/macvlan/).
+Kernel tests model forwarded containers in separate network namespaces; they do
+not claim coverage of every live Docker topology.
+
+The 0.1.9 review covers these flows:
+
+| Scenario | Before connection | While connected | Failure or disconnect |
+| --- | --- | --- | --- |
+| Fresh install, default manual WireGuard | Normal access until Connect; then block before setup | External traffic through VPN; local services allowed | External traffic blocked |
+| Explicit manual opt-out | Normal access | CLI routing, without this kill switch | Direct internet allowed |
+| Boot connect without either protection option | Normal access | CLI routing | Direct internet allowed |
+| Boot connect with protection after connecting | Normal access until successful connection | Tunnel-only external access | External traffic blocked after protection was activated; an initial connection failure has no guard |
+| Boot connect with early blocking | Block before supported network managers start | Tunnel-only external access | External traffic remains blocked, including failed initial setup |
+
+Already-installed boot profiles retain their settings. Save Startup settings to
+refresh root-owned helper copies after an upgrade, then reboot to use the updated
+monitor. An already-running monitor retains the code and policy it loaded.
+The app checks its policy revision and reports older active helpers as unknown,
+with update/reboot guidance, instead of claiming the new policy is enforced.
+The protected path is WireGuard-only; changing a startup selection to OpenVPN
+cannot silently clear checked protection options. The startup form explains that
+unchecked protection options are disabled for an OpenVPN selection, even if the
+previously saved boot profile still uses WireGuard. Selecting early blocking also
+selects and locks the post-connection protection option; both remain unavailable
+on systems without systemd. A historical successful boot report cannot hide a
+currently disabled/failed unit or a missing desktop startup entry. Malformed
+preference enums and non-object boot reports fall back safely.
+No full real reboot, live VPN
+disconnection, or changes to the user's live Docker/firewall state are part of
+the automated qualification.
+The second 0.1.9 review passed 225 unit tests, nine GTK test scripts, both isolated
+network/mount-namespace checks, and complete catalog validation for all 15
+languages. Regression coverage includes malformed preferences, stale boot reports,
+startup control dependencies, legacy monitor detection and disappeared rules.
 
 The 0.1.8 local-network policy was qualified on 2026-11-03 with 216 unit tests,
 real nftables/WireGuard tests in fresh user/network/mount namespaces, and real
@@ -304,7 +366,10 @@ After activation a root helper serves a Unix socket in a root-owned runtime
 directory. Normal users may request status; mutations require a root peer, reached
 through another polkit prompt. The client also checks that its server is root.
 Status compares the actual table against its verified rule fingerprint, ignoring
-only kernel-assigned handles. An activation marker is written before mutation:
+only kernel-assigned handles. Disappearing previously active rules report unknown
+rather than an ordinary off state. The read-only
+`status-policy` request also verifies the monitor's policy revision; the original
+`status` payload stays compatible with older clients. An activation marker is written before mutation:
 if the helper crashes, the UI reports unknown and offers authorized removal rather
 than assuming off. Disable works without an active tunnel or running helper.
 The monitor exits on disable; reboot removes the transient rules/runtime data.

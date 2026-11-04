@@ -113,9 +113,7 @@ with (tempfile.TemporaryDirectory() as directory,
             assert window.startup_state.block_until_connected and window.startup_block.get_active()
             assert window.startup_block.get_label() == labels["Block internet until VPN connects (WireGuard)"]
             assert window.guard_toggle.get_tooltip_text() == labels[
-                "Optional kill switch. Connect with WireGuard, then enable. External IPv4/IPv6 traffic must use the VPN; "
-                "local networks and Docker remain accessible. Stays on after Disconnect or Quit, until disabled or reboot. "
-                "Stays on while changing WireGuard servers. Requires nftables and Linux authorization."]
+                "Enabled by default. Internet works through the VPN; if it drops or disconnects, external access is blocked. Local LAN and Docker services stay available. DNS must use the VPN or a local loopback resolver. Uncheck to allow direct internet. Protection starts on Connect and stays on until disabled or reboot."]
             assert window.startup_block.get_tooltip_text() == labels[
                 "Block external internet before networking starts. Local networks, network maintenance and isolated VPN setup remain allowed. "
                 "Protection stays on if connecting fails and after the VPN connects. Applies on the next boot."]
